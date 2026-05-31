@@ -101,6 +101,11 @@ docker-compose up -d
 | `GET/POST` | `/api/support/messages/` | List/create messages | JWT |
 | `GET/POST` | `/api/support/escalations/` | List/create escalation tickets | JWT |
 
+#### RAG Chat API (`/api/chat/`)
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| `POST` | `/api/chat/` | RAG query endpoint: vector search → prompt build → Gemini generation → citation → auto-escalation | JWT |
+
 #### Accounts API (`/api/accounts/`)
 | Method | Endpoint | Description | Auth |
 |--------|----------|-------------|------|
@@ -156,6 +161,8 @@ CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6380/0')
 
 | File | Purpose |
 |------|---------|
+| `support/chat_view.py` | RAG Chat APIView (`POST /api/chat/`) with pgvector search & auto-escalation |
+| `support/token_logger.py` | Persistent token logger recording stats to `logs/token_usage.jsonl` |
 | `support/serializers.py` | 6 DRF serializers (Document, Upload, Chunk, Conversation, Message, Escalation) |
 | `accounts/serializers.py` | 4 DRF serializers (User, Profile, Register, JWT) |
 | `support/migrations/0002_*.py` | File upload & status migration |
@@ -171,12 +178,13 @@ CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6380/0')
 | `support/rag_utils.py` | Complete RAG pipeline (embed → retrieve → generate) |
 | `support/models.py` | File field, status field, 768-dim vectors |
 | `support/urls.py` | DRF router with 4 registered viewsets |
-| `config/urls.py` | API root health check, support & accounts includes |
+| `config/urls.py` | API root health check, support & accounts includes, added `ChatView` path |
 | `config/settings/base.py` | Gemini config, pgvector dimension, updated Celery |
 | `config/settings/local.py` | Docker-based database configuration |
 | `accounts/views.py` | Registration, profile, and JWT views |
 | `accounts/urls.py` | Router + JWT token endpoints |
 | `requirements.txt` | Updated dependencies (google-generativeai, etc.) |
+| `.gitignore` | Added persistent `logs/` directory |
 
 ### 🗑️ Files Removed
 | File | Reason |
@@ -218,7 +226,9 @@ CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6380/0')
 | Gemini Integration | ✅ Complete | Embeddings + generation working |
 | RAG Pipeline | ✅ Complete | Document → chunks → embed → retrieve → respond |
 | Document Upload API | ✅ Complete | PDF/TXT with multipart upload |
-| REST API Endpoints | ✅ Complete | 10+ endpoints across 2 apps |
+| RAG Chat API Endpoint | ✅ Complete | POST `/api/chat/` with cosine search & auto-escalation |
+| REST API Endpoints | ✅ Complete | 11+ endpoints across 2 apps |
+| Token Usage Logger | ✅ Complete | Logged to persistent JSONL file |
 | JWT Authentication | ✅ Complete | Register, login, refresh, profile |
 | Docker Dev Environment | ✅ Complete | PostgreSQL + pgvector + Redis |
 | Database Migrations | ✅ Complete | File field, status, 768-dim embeddings |
@@ -231,11 +241,11 @@ CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6380/0')
 ## 🚀 What's Next (Phase 3)
 
 - [ ] Frontend chat interface (HTMX + Tailwind or React)
-- [ ] Expose RAG response as a dedicated chat endpoint
+- [x] Expose RAG response as a dedicated chat endpoint (`/api/chat/`)
 - [ ] Swagger/OpenAPI documentation
 - [ ] Unit & integration test coverage
 - [ ] Rate limiting for API endpoints
-- [ ] Token usage analytics dashboard
+- [x] Token usage analytics logger & aggregator
 - [ ] Celery async processing with `.delay()`
 - [ ] WebSocket support for real-time chat
 

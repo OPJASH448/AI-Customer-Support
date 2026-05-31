@@ -53,3 +53,6 @@ celerybeat-schedule
 
 # OS
 .env.local.py
+
+# Logs
+logs/

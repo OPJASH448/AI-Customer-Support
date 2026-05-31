@@ -145,6 +145,8 @@ AI-Customer-Support/
 ├── support/                         # Core RAG support app
 │   ├── models.py                    # Document, DocumentChunk, Conversation, Message, EscalationTicket
 │   ├── views.py                     # 4 ViewSets (Document, Conversation, Message, Escalation)
+│   ├── chat_view.py                 # RAG Chat endpoint APIView (POST /api/chat/)
+│   ├── token_logger.py              # Persistent Gemini token usage logger
 │   ├── serializers.py               # 6 DRF serializers with validation
 │   ├── urls.py                      # DRF router (4 endpoints)
 │   ├── tasks.py                     # 4 Celery tasks (process, escalate, cleanup, test)
@@ -317,6 +319,12 @@ curl -X POST http://localhost:8000/api/support/documents/ \
 | `GET` | `/api/support/documents/{id}/chunks/` | Get document's vector chunks | JWT |
 | `GET` | `/api/support/documents/{id}/status/` | Check processing status | JWT |
 | `DELETE` | `/api/support/documents/{id}/` | Delete document | JWT |
+
+### RAG Chat Endpoint
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| `POST` | `/api/chat/` | RAG multi-turn query: vector search → Gemini 2.0 Flash response → context citation → auto-escalation | JWT |
 
 ### Conversations & Messages
 

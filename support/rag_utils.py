@@ -39,7 +39,7 @@ def retrieve_context(query: str, top_k: int = 5) -> list:
         chunks = DocumentChunk.objects.raw(
             """
             SELECT * FROM support_documentchunk
-            ORDER BY embedding <-> %s
+            ORDER BY embedding <-> %s::vector
             LIMIT %s
             """,
             [query_embedding, top_k]
