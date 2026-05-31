@@ -47,21 +47,23 @@ AI Customer Support Agent is an intelligent customer support system that uses **
 - 🧠 **RAG-Powered Responses** — Semantic document search using pgvector + Gemini embeddings
 - 📄 **Document Processing** — Upload PDF/TXT files, auto-chunk with token overlap, embed into 768-dim vectors
 - 💬 **Multi-turn Conversations** — Track conversation history with context-aware AI responses
-- 🎯 **Context Retrieval** — Top-K cosine similarity search for the most relevant document chunks
+- 🎯 **Context Retrieval** — Top-K cosine similarity search (`<=>`) for the most relevant document chunks
 
 ### Platform Features
 - 🔐 **JWT Authentication** — Secure token-based auth with 60-min access / 1-day refresh
-- 📊 **REST API** — Comprehensive DRF-powered API with 10+ endpoints
-- ⚡ **Async Task Processing** — Celery + Redis for background jobs (embedding, escalation, cleanup)
-- 🎫 **Escalation System** — Priority-based ticket management for human handoff
+- 🎫 **Priority Ticket Queue** — Fetch escalation tickets ordered by priority (`critical` > `high` > `medium` > `low`) with status filtering (GET `/api/tickets/`)
+- 🛠️ **Ticket Resolution** — Resolves customer issues with agent replies and completion timestamps (PATCH `/api/tickets/{id}/resolve/`)
+- 📊 **Real-time Analytics** — Deep analytics on total conversations, escalation rates, average resolution speed, and top unanswered topics (GET `/api/analytics/`)
+- 📝 **Token Usage Logger** — Persistent JSONL token logging (`logs/token_usage.jsonl`) for prompt, completion, and total tokens with user tracking
+- ⚡ **Async Task Processing** — Celery + Redis for background jobs (embedding, email escalation notifications, cleanup)
 - 👤 **User Profiles** — Registration, authentication, and profile management
-- 🛡️ **Production Security** — SSL, HSTS, CORS, per-user data isolation
+- 🛡️ **Production Security & Speed** — SSL, HSTS, CORS, per-user data isolation, and granular DB indexes on priority, status, and creation fields
 
 ### DevOps & Deployment
 - 🐳 **Docker Compose** — One-command local dev environment (PostgreSQL + pgvector + Redis)
-- 🚢 **Render-Ready** — Infrastructure as Code via `render.yaml`
-- ⚙️ **3-Tier Settings** — Separate base, local, and production configurations
-- 📦 **WhiteNoise** — Efficient static file serving in production
+- 🚢 **Render-Ready** — Infrastructure as Code via `render.yaml` with automated migrations via `preDeployCommand`
+- ⚙️ **3-Tier Settings** — Separate base, local, and production configurations with sqlite fallbacks
+- 📦 **WhiteNoise** — Efficient compressed static file serving in production
 
 ---
 
@@ -336,7 +338,15 @@ curl -X POST http://localhost:8000/api/support/documents/ \
 | `GET` | `/api/support/messages/` | List user's messages | JWT |
 | `POST` | `/api/support/messages/` | Send a message | JWT |
 
-### Escalation Tickets
+### Ticket Queue & Analytics
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| `GET` | `/api/tickets/` | Priority Queue API — Returns active tickets ordered by priority (`critical` > `high` > `medium` > `low`), supports status filtering | JWT |
+| `PATCH` | `/api/tickets/{id}/resolve/` | Resolve Ticket API — Updates status to `resolved`, saves `agent_reply` and `resolved_at` timestamp | JWT |
+| `GET` | `/api/analytics/` | Live Analytics Dashboard API — Aggregates key CS metrics: conversations, escalation rate, resolution times, and top unanswered topics | JWT |
+
+### Escalation Tickets (Standard CRUD)
 
 | Method | Endpoint | Description | Auth |
 |--------|----------|-------------|------|
@@ -407,9 +417,11 @@ Issues requiring human review.
 |-------|------|-------------|
 | `conversation` | FK → Conversation | Related conversation |
 | `issue` | TextField | Issue description |
-| `priority` | CharField | `low` / `medium` / `high` / `critical` |
+| `priority` | CharField | `low` / `medium` / `high` / `critical` (mapped from priority scores) |
 | `status` | CharField | `open` / `in_progress` / `resolved` / `closed` |
 | `assigned_to` | FK → User | Assigned agent |
+| `agent_reply` | TextField (nullable) | Support agent's reply to the customer |
+| `resolved_at` | DateTimeField (nullable) | Timestamp of when the ticket was resolved |
 
 ### `UserProfile`
 Extended user profile.
@@ -564,25 +576,25 @@ See [.env.example](.env.example) for the full template.
 - Celery + Redis configuration
 - JWT authentication setup
 - Render deployment configuration
-- Git repository + comprehensive documentation
+- Clean Git repository + comprehensive documentation
 
-### ✅ Phase 2 — RAG Pipeline & AI Integration (Completed)
-- Google Gemini integration (embeddings + generation)
-- Full RAG pipeline (chunk → embed → retrieve → generate)
-- Document upload API with PDF/TXT processing
-- Complete REST API with 10+ endpoints and serializers
-- Docker Compose for local development
-- Database schema evolution (file uploads, 768-dim vectors)
+### ✅ Phase 2 — RAG Pipeline, Ticket Queue & Analytics (Completed)
+- **Google Gemini Integration** — Semantic embeddings (`gemini-embedding-001`) + generation (`gemini-2.0-flash`)
+- **Full RAG Pipeline** — Upload PDF/TXT, auto-chunk with tiktoken token counting, 768-dim vector storage in pgvector, and cosine distance search (`<=>`)
+- **RAG Chat API** (`POST /api/chat/`) — Generates Gemini answers citing sources, logs prompt/completion tokens to `token_usage.jsonl`, scores query urgency, and auto-escalates low-confidence answers
+- **Ticket Queue API** (`GET /api/tickets/`) — High-performance priority queue sorting tickets (`critical` > `high` > `medium` > `low`) with status filters
+- **Ticket Resolution API** (`PATCH /api/tickets/{id}/resolve/`) — Allows agents to resolve tickets with a reply and records completion timestamps
+- **Analytics Dashboard API** (`GET /api/analytics/`) — Generates deep real-time metrics including average resolution time and top unanswered topics
+- **Database Optimizations** — Granular indexes on priority, status, and conversation timestamps for high scalability
+- **Production-Ready Deployment** — Automated migrations via Render's `preDeployCommand`, UTF-8 requirements, and resilient production settings
 
 > 📄 See [README_PHASE2.md](README_PHASE2.md) for the detailed Phase 2 changelog.
 
 ### 🔜 Phase 3 — Frontend & Polish (Upcoming)
-- [ ] Chat interface (HTMX + Tailwind or React)
-- [ ] Dedicated chat/RAG API endpoint
-- [ ] Swagger/OpenAPI documentation
-- [ ] Unit & integration tests
-- [ ] Rate limiting & token analytics
-- [ ] WebSocket real-time chat
+- [ ] Interactive Chat & Admin Dashboard Frontend (Tailwind + React/HTML5)
+- [ ] Swagger/OpenAPI documentation schema
+- [ ] WebSocket real-time chat & notifications
+- [ ] Detailed Rate Limiting & User quotas
 
 ---
 
