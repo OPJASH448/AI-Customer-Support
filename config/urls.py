@@ -22,6 +22,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from support.chat_view import ChatView
+from support.views import TicketListView, TicketResolveView, AnalyticsView
 
 
 @api_view(['GET'])
@@ -34,6 +35,8 @@ def api_root(request):
         'version': '1.0.0',
         'endpoints': {
             'chat': '/api/chat/',
+            'tickets': '/api/tickets/',
+            'analytics': '/api/analytics/',
             'auth': '/api/accounts/',
             'documents': '/api/support/documents/',
             'conversations': '/api/support/conversations/',
@@ -45,6 +48,9 @@ def api_root(request):
             '3_upload_document': 'POST /api/support/documents/',
             '4_get_chunks': 'GET /api/support/documents/{id}/chunks/',
             '5_chat': 'POST /api/chat/',
+            '6_tickets': 'GET /api/tickets/',
+            '7_resolve_ticket': 'PATCH /api/tickets/{id}/resolve/',
+            '8_analytics': 'GET /api/analytics/',
         }
     })
 
@@ -53,6 +59,9 @@ urlpatterns = [
     path('', api_root, name='api_root'),
     path('admin/', admin.site.urls),
     path('api/chat/', ChatView.as_view(), name='chat'),
+    path('api/tickets/', TicketListView.as_view(), name='ticket-list'),
+    path('api/tickets/<int:pk>/resolve/', TicketResolveView.as_view(), name='ticket-resolve'),
+    path('api/analytics/', AnalyticsView.as_view(), name='analytics'),
     path('api/support/', include('support.urls')),
     path('api/accounts/', include('accounts.urls')),
 ]

@@ -1,8 +1,11 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.views import APIView
+from django.db.models import Avg, Count, Q, F
+from django.utils import timezone
 
 
 from .models import Document, DocumentChunk, Conversation, Message, EscalationTicket
@@ -12,7 +15,9 @@ from .serializers import (
     DocumentChunkSerializer,
     ConversationSerializer,
     MessageSerializer,
-    EscalationTicketSerializer
+    EscalationTicketSerializer,
+    TicketListSerializer,
+    TicketResolveSerializer,
 )
 from .tasks import process_document
 
@@ -158,3 +163,113 @@ class EscalationTicketViewSet(viewsets.ModelViewSet):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ─── NEW: Ticket Queue API ───────────────────────────────────────────────────
+
+class TicketListView(generics.ListAPIView):
+    """
+    GET /api/tickets/
+    Priority queue: tickets ordered by priority descending (critical > high > medium > low).
+    Supports ?status=open filter.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = TicketListSerializer
+
+    # Map priority labels to numeric sort values (higher = more urgent)
+    PRIORITY_ORDER = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1}
+
+    def get_queryset(self):
+        qs = EscalationTicket.objects.select_related('conversation', 'assigned_to')
+
+        # Filter by status if provided
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        # Filter by priority if provided
+        priority_filter = self.request.query_params.get('priority')
+        if priority_filter:
+            qs = qs.filter(priority=priority_filter)
+
+        # Order by priority descending using a CASE expression
+        from django.db.models import Case, When, IntegerField
+        priority_ordering = Case(
+            When(priority='critical', then=4),
+            When(priority='high', then=3),
+            When(priority='medium', then=2),
+            When(priority='low', then=1),
+            output_field=IntegerField(),
+        )
+        return qs.annotate(priority_rank=priority_ordering).order_by('-priority_rank', '-created_at')
+
+
+class TicketResolveView(generics.UpdateAPIView):
+    """
+    PATCH /api/tickets/<id>/resolve/
+    Resolve a ticket: sets status='resolved', saves agent_reply, records resolved_at.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = TicketResolveSerializer
+    queryset = EscalationTicket.objects.all()
+    http_method_names = ['patch']
+
+
+class AnalyticsView(APIView):
+    """
+    GET /api/analytics/
+    Returns aggregate support metrics:
+      - total_conversations
+      - escalation_rate (%)
+      - avg_resolution_time_minutes
+      - open_tickets
+      - top_unanswered (top 5 unresolved ticket topics)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        total_conversations = Conversation.objects.count()
+        total_tickets = EscalationTicket.objects.count()
+
+        # Escalation rate = tickets / conversations * 100
+        escalation_rate = 0.0
+        if total_conversations > 0:
+            escalation_rate = round((total_tickets / total_conversations) * 100, 2)
+
+        # Average resolution time (only resolved tickets with resolved_at set)
+        resolved_tickets = EscalationTicket.objects.filter(
+            status='resolved',
+            resolved_at__isnull=False,
+        )
+        avg_resolution = None
+        if resolved_tickets.exists():
+            # Calculate average of (resolved_at - created_at) in seconds, convert to minutes
+            from django.db.models import ExpressionWrapper, DurationField
+            durations = resolved_tickets.annotate(
+                resolution_duration=ExpressionWrapper(
+                    F('resolved_at') - F('created_at'),
+                    output_field=DurationField()
+                )
+            )
+            avg_duration = durations.aggregate(avg=Avg('resolution_duration'))['avg']
+            if avg_duration:
+                avg_resolution = round(avg_duration.total_seconds() / 60, 2)
+
+        # Open tickets count
+        open_tickets = EscalationTicket.objects.filter(
+            status__in=['open', 'in_progress']
+        ).count()
+
+        # Top 5 unanswered topics — extract from unresolved ticket issues
+        unresolved = EscalationTicket.objects.filter(
+            status__in=['open', 'in_progress']
+        ).order_by('-created_at')[:5]
+        top_unanswered = [ticket.issue[:200] for ticket in unresolved]
+
+        return Response({
+            'total_conversations': total_conversations,
+            'escalation_rate': escalation_rate,
+            'avg_resolution_time_minutes': avg_resolution,
+            'open_tickets': open_tickets,
+            'top_unanswered': top_unanswered,
+        })

@@ -68,5 +68,43 @@ class MessageSerializer(serializers.ModelSerializer):
 class EscalationTicketSerializer(serializers.ModelSerializer):
     class Meta:
         model = EscalationTicket
-        fields = ['id', 'conversation', 'issue', 'priority', 'status', 'assigned_to', 'created_at', 'updated_at']
+        fields = ['id', 'conversation', 'issue', 'priority', 'status', 'assigned_to',
+                  'agent_reply', 'created_at', 'updated_at', 'resolved_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class TicketListSerializer(serializers.ModelSerializer):
+    """Read-only serializer for the priority-ordered ticket queue."""
+    conversation_title = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EscalationTicket
+        fields = ['id', 'conversation', 'conversation_title', 'issue', 'priority',
+                  'status', 'assigned_to', 'agent_reply', 'created_at', 'updated_at',
+                  'resolved_at']
+        read_only_fields = fields
+
+    def get_conversation_title(self, obj):
+        return obj.conversation.title if obj.conversation else None
+
+
+class TicketResolveSerializer(serializers.ModelSerializer):
+    """Write serializer for resolving a ticket with an agent reply."""
+
+    class Meta:
+        model = EscalationTicket
+        fields = ['id', 'agent_reply', 'status', 'resolved_at']
+        read_only_fields = ['id', 'resolved_at']
+
+    def validate_agent_reply(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError("agent_reply cannot be empty when resolving a ticket.")
+        return value.strip()
+
+    def update(self, instance, validated_data):
+        from django.utils import timezone
+        instance.agent_reply = validated_data.get('agent_reply', instance.agent_reply)
+        instance.status = 'resolved'
+        instance.resolved_at = timezone.now()
+        instance.save()
+        return instance

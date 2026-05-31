@@ -21,15 +21,15 @@ SECURE_HSTS_PRELOAD = True
 
 # Database - Use environment variable
 DATABASES = {
-    'default': env.db('DATABASE_URL')
+    'default': env.db('DATABASE_URL', default='sqlite:///db.sqlite3')
 }
 
 # Static files with whitenoise
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Celery with Redis
-CELERY_BROKER_URL = env('REDIS_URL')
-CELERY_RESULT_BACKEND = env('REDIS_URL')
+CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6380/0')
+CELERY_RESULT_BACKEND = env('REDIS_URL', default='redis://localhost:6380/0')
 
 # Email in production
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'

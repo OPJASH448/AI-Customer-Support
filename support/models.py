@@ -67,6 +67,9 @@ class Conversation(models.Model):
 
     class Meta:
         ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['created_at'], name='idx_conversation_created'),
+        ]
 
 
 class Message(models.Model):
@@ -117,6 +120,7 @@ class EscalationTicket(models.Model):
     priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
     assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_tickets')
+    agent_reply = models.TextField(blank=True, null=True, help_text="Agent's resolution response")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
@@ -128,4 +132,6 @@ class EscalationTicket(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['status', 'priority']),
+            models.Index(fields=['priority'], name='idx_ticket_priority'),
+            models.Index(fields=['status'], name='idx_ticket_status'),
         ]
