@@ -2,6 +2,10 @@ import os
 from pathlib import Path
 import environ
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 # Initialize environment variables
 env = environ.Env(
     DEBUG=(bool, False)
@@ -138,15 +142,15 @@ SIMPLE_JWT = {
 }
 
 # Celery Configuration
-CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = env('REDIS_URL', default='redis://localhost:6379/0')
+CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6380/0')
+CELERY_RESULT_BACKEND = env('REDIS_URL', default='redis://localhost:6380/0')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
-# OpenAI
-OPENAI_API_KEY = env('OPENAI_API_KEY', default='')
+# Gemini API
+GEMINI_API_KEY = env('GEMINI_API_KEY', default='')
 
 # Vector Search (pgvector)
-PGVECTOR_DIMENSION = 1536  # OpenAI embedding dimension
+PGVECTOR_DIMENSION = 768  # Google Gemini embedding dimension

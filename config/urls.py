@@ -18,8 +18,36 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from rest_framework.response import Response
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def api_root(request):
+    """API root endpoint - health check and documentation"""
+    return Response({
+        'status': 'running',
+        'message': 'AI Customer Support API',
+        'version': '1.0.0',
+        'endpoints': {
+            'auth': '/api/accounts/',
+            'documents': '/api/support/documents/',
+            'conversations': '/api/support/conversations/',
+            'admin': '/admin/',
+        },
+        'quick_start': {
+            '1_register': 'POST /api/accounts/register/register/',
+            '2_login': 'POST /api/accounts/token/',
+            '3_upload_document': 'POST /api/support/documents/',
+            '4_get_chunks': 'GET /api/support/documents/{id}/chunks/',
+        }
+    })
+
 
 urlpatterns = [
+    path('', api_root, name='api_root'),
     path('admin/', admin.site.urls),
     path('api/support/', include('support.urls')),
     path('api/accounts/', include('accounts.urls')),

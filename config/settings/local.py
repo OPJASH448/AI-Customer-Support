@@ -4,12 +4,15 @@ from .base import *
 DEBUG = True
 ALLOWED_HOSTS = ['*']
 
-# Database - SQLite for local development (instant, zero setup)
-# Switch to PostgreSQL later when deploying to Render
+# Database - PostgreSQL with Docker (same as production, but local)
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': env('DB_ENGINE', default='django.db.backends.postgresql'),
+        'NAME': env('DB_NAME', default='ai_support'),
+        'USER': env('DB_USER', default='postgres'),
+        'PASSWORD': env('DB_PASSWORD', default='password'),
+        'HOST': env('DB_HOST', default='localhost'),
+        'PORT': env('DB_PORT', default='5433'),
     }
 }
 
@@ -29,8 +32,8 @@ LOGGING = {
 }
 
 # Celery in local development
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6380/0')
+CELERY_RESULT_BACKEND = env('REDIS_URL', default='redis://localhost:6380/0')
 
 # Email backend for development
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'

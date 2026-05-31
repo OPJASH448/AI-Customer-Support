@@ -7,9 +7,17 @@ class Document(models.Model):
     Base document model for RAG system.
     Stores uploaded documents with metadata.
     """
+    STATUS_CHOICES = [
+        ('processing', 'Processing'),
+        ('ready', 'Ready'),
+        ('failed', 'Failed'),
+    ]
+    
     title = models.CharField(max_length=255)
-    content = models.TextField()
+    content = models.TextField(blank=True, null=True)
+    file = models.FileField(upload_to='documents/', blank=True, null=True)
     source = models.CharField(max_length=255, blank=True, null=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='processing')
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -30,7 +38,7 @@ class DocumentChunk(models.Model):
     document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name='chunks')
     content = models.TextField()
     chunk_index = models.IntegerField()
-    embedding = VectorField(dimensions=1536)  # OpenAI embedding dimension
+    embedding = VectorField(dimensions=768)  # Google Gemini embedding dimension
     tokens = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
