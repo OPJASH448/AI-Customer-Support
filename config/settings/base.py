@@ -41,6 +41,7 @@ THIRD_PARTY_APPS = [
 LOCAL_APPS = [
     'support.apps.SupportConfig',
     'accounts.apps.AccountsConfig',
+    'frontend.apps.FrontendConfig',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -128,10 +129,16 @@ CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
     ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,
 }
+
+# Session / Login
+LOGIN_URL = '/login/'
+SESSION_COOKIE_AGE = 86400  # 24 hours
+SESSION_COOKIE_HTTPONLY = True
 
 # JWT
 from datetime import timedelta

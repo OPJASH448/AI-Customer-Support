@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+{% block title %}Documents — AI Support Agent{% endblock %}
+
+{% block content %}
+<div class="p-8 space-y-8">
+
+  <!-- Page Header -->
+  <div>
+    <h1 class="text-2xl font-bold text-white">Document Manager</h1>
+    <p class="text-sm text-slate-400 mt-0.5">Upload PDFs & TXT files to build your AI knowledge base</p>
+  </div>
+
+  <!-- ── Upload Section ───────────────────────────────────────────── -->
+  <div class="glass rounded-2xl p-6">
+    <h2 class="text-lg font-semibold text-white mb-5 flex items-center gap-2">
+      <svg class="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+      Upload New Document
+    </h2>
+
+    <form id="upload-form" enctype="multipart/form-data" class="space-y-5">
+      {% csrf_token %}
+
+      <!-- Drop Zone -->
+      <div id="drop-zone"
+           class="border-2 border-dashed border-slate-700 rounded-2xl p-10 text-center cursor-pointer hover:border-blue-500/50 hover:bg-blue-500/5 transition-all duration-300"
+           onclick="document.getElementById('file-input').click()"
+           ondragover="handleDragOver(event)"
+           ondragleave="handleDragLeave(event)"
+           ondrop="handleDrop(event)">
+        <div id="drop-content">
+          <div class="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-800 flex items-center justify-center">
+            <svg class="w-7 h-7 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          </div>
+          <div class="text-slate-300 font-medium mb-1">Drop files here or <span class="text-blue-400">click to browse</span></div>
+          <div class="text-xs text-slate-500">Supports PDF and TXT · Max 50MB</div>
+        </div>
+        <div id="file-selected" class="hidden">
+          <div class="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-500/10 flex items-center justify-center">
+            <svg class="w-7 h-7 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          </div>
+          <div id="selected-filename" class="text-blue-400 font-medium text-sm mb-1">No file</div>
+          <div id="selected-filesize" class="text-xs text-slate-500">—</div>
+        </div>
+        <input id="file-input" name="file" type="file" accept=".pdf,.txt" class="hidden" onchange="handleFileSelect(this)"/>
+      </div>
+
+      <!-- Title + Source -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Document Title <span class="text-red-400">*</span></label>
+          <input id="doc-title" name="title" type="text" required
+                 placeholder="e.g. Product Manual v2.0"
+                 class="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm transition-all" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1.5">Source / Category</label>
+          <input name="source" type="text"
+                 placeholder="e.g. internal, product, hr-policy"
+                 class="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm transition-all" />
+        </div>
+      </div>
+
+      <!-- Upload Button -->
+      <div class="flex items-center gap-4">
+        <button type="submit" id="upload-btn"
+                class="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-blue-500/25 transition-all duration-200 text-sm">
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+          Upload & Process
+        </button>
+        <div id="upload-status" class="text-sm hidden"></div>
+      </div>
+
+      <!-- Upload progress -->
+      <div id="upload-progress" class="hidden">
+        <div class="flex items-center gap-3 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+          <div class="w-5 h-5 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin flex-shrink-0"></div>
+          <div class="text-sm text-blue-300">Uploading document — Celery will chunk and embed it in the background…</div>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- ── Document List ─────────────────────────────────────────────── -->
+  <div class="glass rounded-2xl overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800/50">
+      <div>
+        <h2 class="text-lg font-semibold text-white">Your Documents</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Click refresh to update processing status</p>
+      </div>
+      <button onclick="loadDocuments()"
+              class="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-sm text-slate-300 transition-all">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Refresh
+      </button>
+    </div>
+
+    <div id="doc-list" class="divide-y divide-slate-800/30">
+      <div class="px-6 py-10 text-center text-slate-500 flex flex-col items-center gap-2">
+        <div class="w-6 h-6 border-2 border-slate-700 border-t-blue-500 rounded-full animate-spin"></div>
+        Loading documents…
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Delete Confirm Modal -->
+<div id="delete-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="glass rounded-2xl w-full max-w-sm shadow-2xl animate-slide-up p-6 text-center">
+    <div class="w-14 h-14 mx-auto mb-4 rounded-2xl bg-red-500/10 flex items-center justify-center">
+      <svg class="w-7 h-7 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+    </div>
+    <h3 class="text-lg font-semibold text-white mb-2">Delete Document?</h3>
+    <p class="text-sm text-slate-400 mb-6">This will permanently delete the document and all its vector chunks. This cannot be undone.</p>
+    <div class="flex gap-3">
+      <button onclick="closeDeleteModal()" class="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-sm text-slate-300 transition-all">Cancel</button>
+      <button onclick="confirmDelete()" class="flex-1 py-2.5 bg-red-600 hover:bg-red-500 rounded-xl text-sm text-white font-semibold transition-all">Delete</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  const csrfToken = '{{ csrf_token }}';
+  let deleteDocId = null;
+
+  // ── File Drop Zone ────────────────────────────────────────────────
+  function handleDragOver(e) {
+    e.preventDefault();
+    document.getElementById('drop-zone').classList.add('border-blue-500/50','bg-blue-500/5');
+  }
+  function handleDragLeave(e) {
+    document.getElementById('drop-zone').classList.remove('border-blue-500/50','bg-blue-500/5');
+  }
+  function handleDrop(e) {
+    e.preventDefault();
+    handleDragLeave(e);
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    const input = document.getElementById('file-input');
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    showFileSelected(file);
+    autoFillTitle(file.name);
+  }
+  function handleFileSelect(input) {
+    const file = input.files[0];
+    if (!file) return;
+    showFileSelected(file);
+    autoFillTitle(file.name);
+  }
+  function showFileSelected(file) {
+    document.getElementById('drop-content').classList.add('hidden');
+    document.getElementById('file-selected').classList.remove('hidden');
+    document.getElementById('selected-filename').textContent = file.name;
+    document.getElementById('selected-filesize').textContent = (file.size / 1024).toFixed(1) + ' KB';
+  }
+  function autoFillTitle(filename) {
+    const titleInput = document.getElementById('doc-title');
+    if (!titleInput.value) {
+      titleInput.value = filename.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+    }
+  }
+
+  // ── Upload ────────────────────────────────────────────────────────
+  document.getElementById('upload-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const fileInput = document.getElementById('file-input');
+    if (!fileInput.files.length) { showStatus('Please select a file.', 'error'); return; }
+    const title = document.getElementById('doc-title').value.trim();
+    if (!title) { showStatus('Please enter a document title.', 'error'); return; }
+
+    const formData = new FormData(this);
+    document.getElementById('upload-btn').disabled = true;
+    document.getElementById('upload-progress').classList.remove('hidden');
+    showStatus('', '');
+
+    try {
+      const resp = await fetch('/api/support/documents/', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrfToken },
+        body: formData,
+      });
+      const data = await resp.json();
+      document.getElementById('upload-progress').classList.add('hidden');
+
+      if (resp.status === 201) {
+        showStatus('✅ ' + (data.message || 'Document uploaded and processing started!'), 'success');
+        this.reset();
+        document.getElementById('drop-content').classList.remove('hidden');
+        document.getElementById('file-selected').classList.add('hidden');
+        setTimeout(loadDocuments, 800);
+      } else {
+        const errMsg = JSON.stringify(data).replace(/[{}"]/g,'').substring(0, 200);
+        showStatus('❌ ' + errMsg, 'error');
+      }
+    } catch(e) {
+      document.getElementById('upload-progress').classList.add('hidden');
+      showStatus('❌ Network error. Please try again.', 'error');
+    } finally {
+      document.getElementById('upload-btn').disabled = false;
+    }
+  });
+
+  function showStatus(msg, type) {
+    const el = document.getElementById('upload-status');
+    el.classList.remove('hidden','text-emerald-400','text-red-400');
+    if (!msg) { el.classList.add('hidden'); return; }
+    el.textContent = msg;
+    el.classList.add(type === 'error' ? 'text-red-400' : 'text-emerald-400');
+  }
+
+  // ── Document List ─────────────────────────────────────────────────
+  const STATUS_CONFIG = {
+    ready:      { pill: 'pill-ready',      label: 'Ready',      icon: '✓' },
+    processing: { pill: 'pill-processing', label: 'Processing', icon: '⟳' },
+    failed:     { pill: 'pill-failed',     label: 'Failed',     icon: '✗' },
+  };
+
+  async function loadDocuments() {
+    const container = document.getElementById('doc-list');
+    container.innerHTML = `<div class="px-6 py-10 text-center text-slate-500 flex flex-col items-center gap-2">
+      <div class="w-6 h-6 border-2 border-slate-700 border-t-blue-500 rounded-full animate-spin"></div>Loading…</div>`;
+
+    try {
+      const resp = await fetch('/api/support/documents/', { headers: { 'X-CSRFToken': csrfToken } });
+      if (!resp.ok) throw new Error('API error');
+      const data = await resp.json();
+      const docs  = data.results || data;
+
+      if (!docs.length) {
+        container.innerHTML = `
+          <div class="px-6 py-14 text-center">
+            <svg class="w-14 h-14 text-slate-700 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            <div class="text-slate-400 font-medium mb-1">No documents yet</div>
+            <div class="text-sm text-slate-600">Upload your first PDF or TXT to get started</div>
+          </div>`;
+        return;
+      }
+
+      container.innerHTML = docs.map(doc => {
+        const cfg = STATUS_CONFIG[doc.status] || STATUS_CONFIG.processing;
+        const date = doc.created_at ? new Date(doc.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+        const isProcessing = doc.status === 'processing';
+        return `
+          <div class="flex items-center gap-4 px-6 py-4 hover:bg-slate-800/20 transition-all group" id="doc-row-${doc.id}">
+            <div class="flex-shrink-0 w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center">
+              <svg class="w-5 h-5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            </div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-white truncate">${escHtml(doc.title)}</span>
+                <span class="flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.pill}">
+                  ${isProcessing ? `<span class="inline-block w-2 h-2 border border-current border-t-transparent rounded-full animate-spin"></span>` : cfg.icon}
+                  ${cfg.label}
+                </span>
+              </div>
+              <div class="flex items-center gap-3 mt-0.5 text-xs text-slate-500">
+                <span>${doc.chunk_count ?? 0} chunk${doc.chunk_count !== 1 ? 's' : ''}</span>
+                ${doc.source ? `<span>·</span><span>${escHtml(doc.source)}</span>` : ''}
+                <span>·</span><span>${date}</span>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button onclick="openDeleteModal(${doc.id})"
+                      class="flex items-center gap-1 px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 text-xs rounded-lg transition-all">
+                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                Delete
+              </button>
+            </div>
+          </div>`;
+      }).join('');
+    } catch(e) {
+      container.innerHTML = `<div class="px-6 py-8 text-center text-red-400 text-sm">Failed to load documents. Are you logged in?</div>`;
+    }
+  }
+
+  // ── Delete ────────────────────────────────────────────────────────
+  function openDeleteModal(docId) {
+    deleteDocId = docId;
+    document.getElementById('delete-modal').classList.remove('hidden');
+  }
+  function closeDeleteModal() {
+    document.getElementById('delete-modal').classList.add('hidden');
+    deleteDocId = null;
+  }
+  async function confirmDelete() {
+    if (!deleteDocId) return;
+    try {
+      const resp = await fetch(`/api/support/documents/${deleteDocId}/`, {
+        method: 'DELETE',
+        headers: { 'X-CSRFToken': csrfToken },
+      });
+      closeDeleteModal();
+      if (resp.status === 204) {
+        document.getElementById(`doc-row-${deleteDocId}`)?.remove();
+        loadDocuments();
+      } else {
+        alert('Delete failed.');
+      }
+    } catch(e) { alert('Network error'); }
+  }
+
+  function escHtml(str) {
+    if (!str) return '';
+    const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
+  }
+
+  // Init
+  loadDocuments();
+</script>
+{% endblock %}

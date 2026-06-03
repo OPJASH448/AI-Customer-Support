@@ -10,9 +10,8 @@ SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_BROWSER_XSS_FILTER = True
-SECURE_CONTENT_SECURITY_POLICY = {
-    'default-src': ("'self'",),
-}
+# Note: Content-Security-Policy is handled by a middleware or web server header,
+# not a Django setting named SECURE_CONTENT_SECURITY_POLICY.
 
 # HSTS
 SECURE_HSTS_SECONDS = 31536000

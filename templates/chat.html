@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+{% block title %}Chat — AI Support Agent{% endblock %}
+
+{% block content %}
+<div class="flex h-full flex-col" style="height: 100vh;">
+
+  <!-- Page Header -->
+  <div class="flex-shrink-0 px-8 pt-8 pb-4 border-b border-slate-800/50">
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold text-white">AI Chat</h1>
+        <p class="text-sm text-slate-400 mt-0.5">Ask questions — RAG retrieves the best context from your documents</p>
+      </div>
+      <div class="flex items-center gap-2 text-xs text-slate-500 glass px-3 py-1.5 rounded-lg">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        Gemini 2.0 Flash · HNSW Vector Search
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat Area -->
+  <div class="flex flex-1 overflow-hidden">
+
+    <!-- Messages Column -->
+    <div class="flex-1 flex flex-col overflow-hidden">
+      <!-- Scrollable messages -->
+      <div id="messages" class="flex-1 overflow-y-auto px-8 py-6 space-y-4 scroll-smooth">
+
+        <!-- Welcome message -->
+        <div class="flex items-start gap-3 animate-fade-in" id="welcome-msg">
+          <div class="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
+            <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17H3a2 2 0 01-2-2V5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2h-2"/></svg>
+          </div>
+          <div class="max-w-lg">
+            <div class="bg-slate-800 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-200 leading-relaxed">
+              👋 Hi <strong>{{ user.username }}</strong>! I'm your AI support agent powered by Gemini + RAG.<br/>
+              Upload documents first, then ask me anything about them!
+            </div>
+            <div class="text-xs text-slate-600 mt-1 ml-1">AI Agent · just now</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Typing indicator (hidden by default) -->
+      <div id="typing-indicator" class="hidden px-8 pb-2">
+        <div class="flex items-start gap-3">
+          <div class="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
+            <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17H3a2 2 0 01-2-2V5a2 2 0 012-2h5a2 2 0 012 2v10a2 2 0 01-2 2h-2"/></svg>
+          </div>
+          <div class="bg-slate-800 rounded-2xl rounded-tl-sm px-4 py-3">
+            <div class="flex items-center gap-1.5">
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Area -->
+      <div class="flex-shrink-0 px-8 pb-8 pt-4 border-t border-slate-800/50">
+        <!-- Escalation banner (hidden by default) -->
+        <div id="escalation-banner" class="hidden mb-4 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center gap-3">
+          <svg class="w-5 h-5 text-amber-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+          <span class="text-amber-300 text-sm">
+            This conversation has been <strong>escalated to a human agent</strong>. Ticket #<span id="ticket-id-display">—</span> created.
+          </span>
+        </div>
+
+        <form id="chat-form" class="flex gap-3">
+          {% csrf_token %}
+          <input type="hidden" id="conversation-id" name="conversation_id" value="" />
+          <div class="flex-1 relative">
+            <textarea id="chat-input" name="user_message"
+                      rows="1"
+                      placeholder="Ask anything about your documents…"
+                      class="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm resize-none overflow-hidden leading-6"
+                      style="min-height:48px; max-height: 160px;"
+                      onkeydown="handleChatKey(event)"></textarea>
+          </div>
+          <button type="submit" id="send-btn"
+                  class="flex-shrink-0 w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-xl flex items-center justify-center text-white transition-all duration-200 hover:shadow-lg hover:shadow-blue-500/25 self-end">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+          </button>
+        </form>
+        <p class="text-xs text-slate-600 mt-2 text-center">Powered by Gemini 2.0 Flash · pgvector HNSW</p>
+      </div>
+    </div>
+
+    <!-- Conversations Sidebar -->
+    <div class="w-64 flex-shrink-0 border-l border-slate-800 flex flex-col">
+      <div class="px-4 py-4 border-b border-slate-800 flex items-center justify-between">
+        <span class="text-sm font-semibold text-slate-300">Conversations</span>
+        <button onclick="newConversation()"
+                class="text-xs text-blue-400 hover:text-blue-300 transition-colors px-2 py-1 hover:bg-blue-500/10 rounded-lg">
+          + New
+        </button>
+      </div>
+      <div id="conversation-list" class="flex-1 overflow-y-auto p-3 space-y-1">
+        {% for conv in conversations %}
+        <button onclick="loadConversation({{ conv.id }}, '{{ conv.title|truncatechars:30|escapejs }}')"
+                data-conv-id="{{ conv.id }}"
+                class="conv-item w-full text-left px-3 py-2.5 rounded-lg hover:bg-slate-800 transition-all text-sm {% if conv.id == current_conv_id %}bg-slate-800 text-white{% else %}text-slate-400{% endif %}">
+          <div class="font-medium text-slate-300 truncate text-xs">{{ conv.title|truncatechars:32 }}</div>
+          <div class="text-xs text-slate-600 mt-0.5">{{ conv.updated_at|timesince }} ago</div>
+        </button>
+        {% empty %}
+        <p class="text-xs text-slate-600 text-center py-4">No conversations yet</p>
+        {% endfor %}
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Message Templates (rendered by JS) -->
+<template id="user-bubble-template">
+  <div class="flex justify-end animate-fade-in">
+    <div class="max-w-lg">
+      <div class="bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl rounded-tr-sm px-4 py-3 text-sm text-white leading-relaxed MSG_CONTENT"></div>
+      <div class="text-xs text-slate-600 mt-1 mr-1 text-right">You · just now</div>
+    </div>
+  </div>
+</template>
+
+<template id="ai-bubble-template">
+  <div class="flex items-start gap-3 animate-fade-in">
+    <div class="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0">
+      <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18"/></svg>
+    </div>
+    <div class="max-w-lg min-w-0">
+      <div class="bg-slate-800 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-200 leading-relaxed AI_CONTENT"></div>
+      <div class="flex flex-wrap gap-1.5 mt-2 CITATIONS_AREA"></div>
+      <div class="text-xs text-slate-600 mt-1 ml-1">AI Agent · just now</div>
+    </div>
+  </div>
+</template>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  const csrfToken = '{{ csrf_token }}';
+  let currentConvId = {{ current_conv_id|default:'null' }};
+
+  // Auto-resize textarea
+  const textarea = document.getElementById('chat-input');
+  textarea.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 160) + 'px';
+  });
+
+  function handleChatKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      document.getElementById('chat-form').dispatchEvent(new Event('submit'));
+    }
+  }
+
+  function newConversation() {
+    currentConvId = null;
+    document.getElementById('conversation-id').value = '';
+    document.getElementById('messages').innerHTML = `
+      <div class="flex items-start gap-3 animate-fade-in">
+        <div class="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
+          <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18"/></svg>
+        </div>
+        <div class="max-w-lg">
+          <div class="bg-slate-800 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-200 leading-relaxed">
+            New conversation started! Ask me anything about your documents.
+          </div>
+        </div>
+      </div>`;
+    document.getElementById('escalation-banner').classList.add('hidden');
+  }
+
+  async function loadConversation(convId, title) {
+    currentConvId = convId;
+    document.getElementById('conversation-id').value = convId;
+
+    // Highlight active conversation
+    document.querySelectorAll('.conv-item').forEach(el => {
+      el.classList.remove('bg-slate-800', 'text-white');
+      el.classList.add('text-slate-400');
+    });
+    document.querySelector(`[data-conv-id="${convId}"]`)?.classList.add('bg-slate-800', 'text-white');
+
+    // Fetch messages from API
+    try {
+      const resp = await fetch(`/api/support/conversations/${convId}/messages/`, {
+        headers: { 'X-CSRFToken': csrfToken }
+      });
+      if (!resp.ok) return;
+      const msgs = await resp.json();
+      const container = document.getElementById('messages');
+      container.innerHTML = '';
+      msgs.forEach(m => appendMessage(m.role, m.content, []));
+      container.scrollTop = container.scrollHeight;
+    } catch(e) { console.error(e); }
+  }
+
+  function appendMessage(role, text, sources) {
+    const container = document.getElementById('messages');
+    if (role === 'user') {
+      const div = document.createElement('div');
+      div.className = 'flex justify-end animate-fade-in';
+      div.innerHTML = `
+        <div class="max-w-lg">
+          <div class="bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl rounded-tr-sm px-4 py-3 text-sm text-white leading-relaxed">${escHtml(text)}</div>
+          <div class="text-xs text-slate-600 mt-1 mr-1 text-right">You · just now</div>
+        </div>`;
+      container.appendChild(div);
+    } else {
+      const div = document.createElement('div');
+      div.className = 'flex items-start gap-3 animate-fade-in';
+      const citations = (sources || []).map(s =>
+        `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium">
+          <svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z"/></svg>
+          ${escHtml(s)}</span>`
+      ).join('');
+      div.innerHTML = `
+        <div class="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center">
+          <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18"/></svg>
+        </div>
+        <div class="max-w-lg min-w-0">
+          <div class="bg-slate-800 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-200 leading-relaxed">${escHtml(text)}</div>
+          ${citations ? `<div class="flex flex-wrap gap-1.5 mt-2">${citations}</div>` : ''}
+          <div class="text-xs text-slate-600 mt-1 ml-1">AI Agent · just now</div>
+        </div>`;
+      container.appendChild(div);
+    }
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function escHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  function showTyping() {
+    document.getElementById('typing-indicator').classList.remove('hidden');
+    const container = document.getElementById('messages');
+    container.scrollTop = container.scrollHeight;
+  }
+  function hideTyping() {
+    document.getElementById('typing-indicator').classList.add('hidden');
+  }
+
+  // Chat form submission
+  document.getElementById('chat-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    // Add user message
+    appendMessage('user', msg, []);
+    input.value = '';
+    input.style.height = '48px';
+
+    // Show typing
+    showTyping();
+    document.getElementById('send-btn').disabled = true;
+
+    try {
+      const body = { user_message: msg };
+      if (currentConvId) body.conversation_id = currentConvId;
+
+      const resp = await fetch('/api/chat/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        body: JSON.stringify(body),
+      });
+
+      hideTyping();
+      const data = await resp.json();
+
+      if (resp.ok) {
+        // Save conversation ID
+        currentConvId = data.conversation_id;
+        document.getElementById('conversation-id').value = currentConvId;
+
+        // Show answer
+        appendMessage('assistant', data.answer, data.sources || []);
+
+        // Escalation banner
+        if (data.escalated) {
+          const banner = document.getElementById('escalation-banner');
+          banner.classList.remove('hidden');
+          document.getElementById('ticket-id-display').textContent = data.ticket_id || '—';
+        }
+      } else {
+        appendMessage('assistant', '⚠️ ' + (data.error || 'Something went wrong. Please try again.'), []);
+      }
+    } catch(err) {
+      hideTyping();
+      appendMessage('assistant', '⚠️ Network error. Please check your connection.', []);
+    } finally {
+      document.getElementById('send-btn').disabled = false;
+    }
+  });
+</script>
+{% endblock %}

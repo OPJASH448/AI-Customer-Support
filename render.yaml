@@ -18,6 +18,8 @@ services:
         fromService:
           name: support-redis
           property: connectionString
+      - key: GEMINI_API_KEY
+        sync: false
 
   - type: worker
     name: support-agent-worker
@@ -37,6 +39,8 @@ services:
         fromService:
           name: support-redis
           property: connectionString
+      - key: GEMINI_API_KEY
+        sync: false
 
 databases:
   - name: support-db
