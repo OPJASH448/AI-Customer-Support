@@ -43,6 +43,35 @@ def logout_view(request):
     return redirect('frontend:login')
 
 
+@require_http_methods(['GET', 'POST'])
+def signup_view(request):
+    """Sign up page — register a new user and log them in."""
+    if request.user.is_authenticated:
+        return redirect('frontend:chat')
+
+    error = None
+    if request.method == 'POST':
+        username = request.POST.get('username', '').strip()
+        email = request.POST.get('email', '').strip()
+        password = request.POST.get('password', '')
+        password_confirm = request.POST.get('password_confirm', '')
+
+        if not username or not email or not password:
+            error = "All fields are required."
+        elif password != password_confirm:
+            error = "Passwords do not match."
+        elif User.objects.filter(username=username).exists():
+            error = "Username already exists."
+        else:
+            # Create the user
+            user = User.objects.create_user(username=username, email=email, password=password)
+            # Log the user in
+            login(request, user)
+            return redirect('frontend:chat')
+
+    return render(request, 'signup.html', {'error': error})
+
+
 @login_required(login_url='/login/')
 def chat_view(request):
     """Main chat interface with conversation history sidebar."""
