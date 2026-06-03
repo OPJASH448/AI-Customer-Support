@@ -108,3 +108,9 @@ class TicketResolveSerializer(serializers.ModelSerializer):
         instance.resolved_at = timezone.now()
         instance.save()
         return instance
+
+
+class RAGAskSerializer(serializers.Serializer):
+    question = serializers.CharField(max_length=4000)
+    top_k = serializers.IntegerField(required=False, min_value=1, max_value=20, default=5)
+    conversation_id = serializers.IntegerField(required=False)

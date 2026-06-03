@@ -113,14 +113,14 @@ AI Customer Support Agent is an intelligent customer support system that uses **
 | **Auth** | SimpleJWT | 5.2 | JWT authentication |
 | **AI / LLM** | Google Gemini | 2.0 Flash | Response generation |
 | **Embeddings** | Gemini Embedding | 001 | 768-dim vector embeddings |
-| **Vector DB** | pgvector | — | PostgreSQL vector similarity search |
+| **Vector DB** | pgvector | 0.4.2 | PostgreSQL vector similarity search + HNSW index |
 | **Database** | PostgreSQL | 16 | Primary data store |
 | **Cache/Broker** | Redis | 7 | Celery task broker |
 | **Async Tasks** | Celery | 5.3 | Background job processing |
 | **WSGI** | Gunicorn | 20.1 | Production server |
-| **Static Files** | WhiteNoise | 6.4 | Compressed static serving |
-| **PDF Parsing** | PyPDF2 | — | Document text extraction |
-| **Tokenization** | tiktoken | — | Token counting & chunking |
+| **Static Files** | WhiteNoise | 6.4 | Compressed static file serving |
+| **PDF Parsing** | PyPDF2 | 3.0+ | Document text extraction |
+| **Tokenization** | tiktoken | 0.5+ | Token counting & chunking |
 | **Config** | django-environ | — | Environment variable management |
 | **Deployment** | Render | — | Cloud PaaS hosting |
 | **Containers** | Docker Compose | 3.9 | Local development |
@@ -145,16 +145,18 @@ AI-Customer-Support/
 │       └── production.py            # Production (SSL, HSTS, Render)
 │
 ├── support/                         # Core RAG support app
-│   ├── models.py                    # Document, DocumentChunk, Conversation, Message, EscalationTicket
-│   ├── views.py                     # 4 ViewSets (Document, Conversation, Message, Escalation)
-│   ├── chat_view.py                 # RAG Chat endpoint APIView (POST /api/chat/)
-│   ├── token_logger.py              # Persistent Gemini token usage logger
+│   ├── models.py                    # Document, DocumentChunk (+HNSW index), Conversation, Message, EscalationTicket
+│   ├── views.py                     # 4 ViewSets + RAGAskView + TicketListView + AnalyticsView
+│   ├── chat_view.py                 # Optimized RAG Chat APIView with query chunking + RRF fusion
+│   ├── rag.py                       # embed_query, retrieve_similar_chunks, generate_grounded_answer
+│   ├── rag_utils.py                 # Query chunking, batch embedding, fused RRF vector search
+│   ├── token_logger.py              # Persistent Gemini token usage logger (JSONL)
 │   ├── serializers.py               # 6 DRF serializers with validation
-│   ├── urls.py                      # DRF router (4 endpoints)
-│   ├── tasks.py                     # 4 Celery tasks (process, escalate, cleanup, test)
-│   ├── rag_utils.py                 # RAG pipeline (embed, retrieve, generate)
+│   ├── urls.py                      # DRF router + RAG ask endpoint
+│   ├── tasks.py                     # 4 Celery tasks (process_document, escalate, cleanup, test)
 │   ├── admin.py                     # Django admin registration
 │   └── migrations/                  # Database migrations
+│       └── 0005_documentchunk_docchunk_embed_hnsw_idx.py  # HNSW index migration
 │
 ├── accounts/                        # User management app
 │   ├── models.py                    # UserProfile model
@@ -171,10 +173,14 @@ AI-Customer-Support/
 │
 ├── docker-compose.yml               # Local dev: PostgreSQL + Redis
 ├── render.yaml                      # Render deployment IaC
-├── requirements.txt                 # Python dependencies
+├── requirements.txt                 # Python dependencies (pgvector upgraded to 0.4.2)
 ├── manage.py                        # Django management
 ├── .env.example                     # Environment template
 ├── .gitignore                       # Git exclusions
+│
+├── test_pdf_flow.py                 # End-to-end PDF upload → chunk → embed pipeline test
+├── test_rag_ask.py                  # RAG Ask endpoint full pipeline test
+├── test_remaining.py                # HNSW retrieval, LLM generation, citation, history test
 │
 ├── README.md                        # ← You are here
 ├── README_PHASE2.md                 # Phase 2 detailed changelog
@@ -485,8 +491,11 @@ The Retrieval Augmented Generation pipeline is the core intelligence of this sys
 | Chunk Size | 500 tokens | Window size for splitting |
 | Chunk Overlap | 50 tokens | Sliding window overlap |
 | Top-K Retrieval | 5 | Number of chunks retrieved |
-| Max Output Tokens | 500 | Response length limit |
-| Temperature | 0.7 | Response creativity |
+| Max Output Tokens | 600–1000 | Response length limit |
+| Temperature | 0.3 | Response creativity (low = factual) |
+| Vector Index | HNSW (`vector_cosine_ops`) | pgvector ANN index — O(log N) search |
+| Query Chunking | Auto (>400 chars) | Long queries split to prevent embedding dilution |
+| Fusion Strategy | Reciprocal Rank Fusion (RRF) | Multi-chunk results merged by 1/rank scoring |
 
 ---
 
@@ -590,11 +599,70 @@ See [.env.example](.env.example) for the full template.
 
 > 📄 See [README_PHASE2.md](README_PHASE2.md) for the detailed Phase 2 changelog.
 
-### 🔜 Phase 3 — Frontend & Polish (Upcoming)
+### ✅ Phase 3 — RAG Optimization & Vector Search Hardening (Completed)
+
+#### pgvector HNSW Index
+- Upgraded `pgvector` to `0.4.2` to unlock `HnswIndex` support
+- Added `HnswIndex(fields=['embedding'], opclasses=['vector_cosine_ops'])` on `DocumentChunk` model
+- Generated and applied Django migration `0005_documentchunk_docchunk_embed_hnsw_idx.py`
+- Reduces vector search complexity from **O(N)** linear scan to **O(log N)** Approximate Nearest Neighbour search
+
+#### Smart Query Chunking
+- Long user queries (>400 chars) are automatically split into semantic sentence-level chunks
+- Prevents **embedding dilution** — single vectors for multi-topic queries lose semantic precision
+- Short queries bypass chunking for sub-second response latency
+
+#### Reciprocal Rank Fusion (RRF)
+- Each query chunk independently searches the pgvector HNSW index
+- Results merged using RRF: `score(chunk) = Σ 1/rank` across all query embeddings
+- Guarantees top-5 most contextually relevant chunks even for cross-topic or compound questions
+
+#### Batch Embedding
+- Multiple query chunks sent to Gemini embedding API in a single batch call
+- Falls back to sequential calls if batch API is unavailable
+
+#### Bug Fixes
+- Fixed missing `PdfReader` import in `support/tasks.py`
+- Fixed `gemini-1.5-flash` → `gemini-2.0-flash` model name in `support/rag.py`
+- Added proper HTTP 429 handling in `RAGAskView` for Gemini rate limits
+- Fixed `document.documentchunk_set` → `document.chunks` reverse relation throughout codebase
+
+### 🔜 Phase 4 — Frontend & Polish (Upcoming)
 - [ ] Interactive Chat & Admin Dashboard Frontend (Tailwind + React/HTML5)
 - [ ] Swagger/OpenAPI documentation schema
 - [ ] WebSocket real-time chat & notifications
 - [ ] Detailed Rate Limiting & User quotas
+
+---
+
+## 🧪 End-to-End Pipeline Test Results
+
+Full pipeline tested with a real PDF (`JaswanthKanipakam.23BCS123.pdf`) on 2026-06-03.
+
+| Component | Status | Details |
+|---|---|---|
+| PDF Upload API | ✅ Pass | `POST /api/support/documents/` → HTTP 201 |
+| PDF Parsing (PyPDF2) | ✅ Pass | Text extracted from all pages |
+| Chunk Creation | ✅ Pass | 3 chunks created (500-tok, 50-tok overlap) |
+| Embedding Generation | ✅ Pass | 768-dim vectors via `gemini-embedding-001` |
+| pgvector Storage | ✅ Pass | Chunks stored + retrievable from PostgreSQL |
+| HNSW Vector Index Retrieval | ✅ Pass | Top-5 chunks ranked by cosine distance |
+| LLM Answer Generation | ✅ Pass | Grounded answer via `gemini-2.0-flash` |
+| Source Citation Return | ✅ Pass | 5 cited sources with `document_title` + `distance` |
+| Conversation History Saving | ✅ Pass | Messages persisted, context_chunks linked, DB assertions passed |
+
+### Sample HNSW Retrieval Result
+
+```
+Query: "what are the achievements of jaswanth"
+[1] Jaswanth Kanipakam CV  | Chunk#0 | Cosine Distance: 0.26260  <- Best match
+[2] Jaswanth Kanipakam CV  | Chunk#1 | Cosine Distance: 0.40879
+[3] Jaswanth Kanipakam CV  | Chunk#2 | Cosine Distance: 0.45843
+[4] opp.txt Robot Code     | Chunk#0 | Cosine Distance: 0.53509
+[5] Test Processing        | Chunk#0 | Cosine Distance: 0.53509
+```
+
+> All 3 CV chunks ranked highest — HNSW cosine search correctly identifies the most relevant document.
 
 ---
 
@@ -616,7 +684,7 @@ This project is open source and available under the [MIT License](LICENSE).
 
 <div align="center">
 
-**Created**: May 28, 2026 | **Phase 2 Completed**: May 2026  
+**Created**: May 28, 2026 | **Phase 2 Completed**: May 2026 | **Phase 3 Completed**: June 2026  
 **Author**: [OPJASH448](https://github.com/OPJASH448)
 
 ⭐ Star this repo if you find it helpful!

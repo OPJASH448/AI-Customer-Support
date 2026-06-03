@@ -12,4 +12,8 @@ router.register(r'escalations', views.EscalationTicketViewSet, basename='escalat
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('rag/ask/', views.RAGAskView.as_view(), name='rag-ask'),
+    path('tickets/', views.TicketListView.as_view(), name='ticket-list'),
+    path('tickets/<int:pk>/resolve/', views.TicketResolveView.as_view(), name='ticket-resolve'),
+    path('analytics/', views.AnalyticsView.as_view(), name='analytics'),
 ]

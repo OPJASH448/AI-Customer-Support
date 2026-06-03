@@ -1,6 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
-from pgvector.django import VectorField
+from pgvector.django import VectorField, HnswIndex
 
 class Document(models.Model):
     """
@@ -49,6 +49,11 @@ class DocumentChunk(models.Model):
         ordering = ['document', 'chunk_index']
         indexes = [
             models.Index(fields=['document']),
+            HnswIndex(
+                name='docchunk_embed_hnsw_idx',
+                fields=['embedding'],
+                opclasses=['vector_cosine_ops']
+            )
         ]
 
 

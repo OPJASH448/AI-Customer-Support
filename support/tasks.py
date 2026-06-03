@@ -1,9 +1,9 @@
 from celery import shared_task
 from django.core.mail import send_mail
 from django.conf import settings
-import json
 import os
 import google.generativeai as genai
+from PyPDF2 import PdfReader
 
 # Configure Gemini
 genai.configure(api_key=os.environ.get('GEMINI_API_KEY') or settings.GEMINI_API_KEY)
@@ -28,13 +28,11 @@ def process_document(document_id):
     Main document processing task:
     1. Extract text from PDF/TXT
     2. Split into 500-token chunks with 50-token overlap
-    3. Call OpenAI text-embedding-3-small for each chunk
+    3. Generate embeddings for each chunk in batches of 20
     4. Save DocumentChunk with embeddings to pgvector
     5. Update Document status to 'ready' or 'failed'
     """
     from .models import Document, DocumentChunk
-    from PyPDF2 import PdfReader
-    import tiktoken
     
     try:
         document = Document.objects.get(id=document_id)
@@ -60,29 +58,40 @@ def process_document(document_id):
         if not text or len(text.strip()) == 0:
             raise ValueError("Extracted text is empty")
         
+        # Persist extracted text for audit/debugging and optional fallback use
+        document.content = text
+        document.save(update_fields=['content', 'updated_at'])
+
         # Split into chunks (500 tokens, 50-token overlap)
         chunks = split_into_chunks(text, chunk_size=500, overlap=50)
-        
-        # Embed chunks in batches of 20
+
+        # Re-processing should replace previous chunk vectors for this document
+        document.chunks.all().delete()
+
+        # Embed chunks in batches of 20 and bulk insert chunks
         chunk_objects = []
-        for i, chunk_text in enumerate(chunks):
-            embedding = get_embedding(chunk_text)
-            
-            chunk_obj = DocumentChunk(
-                document=document,
-                content=chunk_text,
-                chunk_index=i,
-                embedding=embedding,
-                tokens=count_tokens(chunk_text)
-            )
-            chunk_objects.append(chunk_obj)
+        batch_size = 20
+        for batch_start in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[batch_start:batch_start + batch_size]
+            batch_embeddings = get_embeddings_batch(batch_chunks)
+
+            for offset, (chunk_text, embedding) in enumerate(zip(batch_chunks, batch_embeddings)):
+                chunk_index = batch_start + offset
+                chunk_obj = DocumentChunk(
+                    document=document,
+                    content=chunk_text,
+                    chunk_index=chunk_index,
+                    embedding=embedding,
+                    tokens=count_tokens(chunk_text)
+                )
+                chunk_objects.append(chunk_obj)
         
         # Bulk create chunks
         DocumentChunk.objects.bulk_create(chunk_objects)
         
         # Update document status to ready
         document.status = 'ready'
-        document.save()
+        document.save(update_fields=['status', 'updated_at'])
         
         return {
             'status': 'success',
@@ -96,8 +105,8 @@ def process_document(document_id):
         try:
             document = Document.objects.get(id=document_id)
             document.status = 'failed'
-            document.save()
-        except:
+            document.save(update_fields=['status', 'updated_at'])
+        except Exception:
             pass
         
         return {
@@ -167,6 +176,17 @@ def get_embedding(text):
         return result['embedding']
     except Exception as e:
         raise ValueError(f"Error getting embedding from Gemini: {str(e)}")
+
+
+def get_embeddings_batch(texts):
+    """
+    Generate embeddings for a list of chunk texts.
+    Batches are orchestrated by caller at size=20 for stable throughput.
+    """
+    embeddings = []
+    for text in texts:
+        embeddings.append(get_embedding(text))
+    return embeddings
 
 
 @shared_task

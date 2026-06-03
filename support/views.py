@@ -6,6 +6,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.views import APIView
 from django.db.models import Avg, Count, Q, F
 from django.utils import timezone
+from kombu.exceptions import OperationalError
 
 
 from .models import Document, DocumentChunk, Conversation, Message, EscalationTicket
@@ -18,8 +19,10 @@ from .serializers import (
     EscalationTicketSerializer,
     TicketListSerializer,
     TicketResolveSerializer,
+    RAGAskSerializer,
 )
 from .tasks import process_document
+from .rag import embed_query, retrieve_similar_chunks, generate_grounded_answer
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
@@ -53,23 +56,20 @@ class DocumentViewSet(viewsets.ModelViewSet):
             # Create document and attach file
             document = serializer.save(uploaded_by=request.user, status='processing')
 
-            # Process document synchronously so it always completes,
-            # even when no Celery worker is running.
-            task_status_message = 'Document uploaded and processed successfully.'
+            # Dispatch async ingestion task to Celery worker.
+            task_status_message = 'Document uploaded successfully. Processing started.'
             try:
-                result = process_document(document.id)
-                if isinstance(result, dict) and result.get('status') == 'failed':
-                    task_status_message = (
-                        f"Document uploaded, but processing failed: "
-                        f"{result.get('error', 'unknown error')}"
-                    )
-            except Exception as proc_err:
+                process_document.delay(document.id)
+            except OperationalError:
                 task_status_message = (
-                    f'Document uploaded, but processing failed: {str(proc_err)}'
+                    'Document uploaded, but background processing queue is unavailable. '
+                    'Start Redis/Celery and retry processing.'
                 )
-
-            # Reload document from DB to reflect post-processing state
-            document.refresh_from_db()
+            except Exception:
+                task_status_message = (
+                    'Document uploaded, but task dispatch failed unexpectedly. '
+                    'Check Celery worker logs and retry processing.'
+                )
 
             return Response(
                 {
@@ -273,3 +273,96 @@ class AnalyticsView(APIView):
             'open_tickets': open_tickets,
             'top_unanswered': top_unanswered,
         })
+
+
+class RAGAskView(APIView):
+    """
+    POST /api/support/rag/ask/
+    End-to-end RAG flow:
+      1) Embed user question
+      2) Retrieve top-k nearest chunks via pgvector cosine distance (HNSW accelerated)
+      3) Generate grounded answer from retrieved context
+      4) Persist user/assistant messages and linked context chunks
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = RAGAskSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        question = serializer.validated_data['question']
+        top_k = serializer.validated_data.get('top_k', 5)
+        conversation_id = serializer.validated_data.get('conversation_id')
+
+        # Resolve or create conversation
+        if conversation_id:
+            conversation = Conversation.objects.filter(
+                id=conversation_id,
+                user=request.user,
+            ).first()
+            if not conversation:
+                return Response(
+                    {'detail': 'Conversation not found for this user.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            conversation = Conversation.objects.create(
+                user=request.user,
+                title=question[:80],
+            )
+
+        # Persist user message
+        user_msg = Message.objects.create(
+            conversation=conversation,
+            role='user',
+            content=question,
+            tokens_used=0,
+        )
+
+        # RAG retrieval and grounded generation
+        try:
+            query_embedding = embed_query(question)
+            chunks = retrieve_similar_chunks(query_embedding, user=request.user, top_k=top_k)
+            answer = generate_grounded_answer(question, chunks)
+        except Exception as e:
+            error_str = str(e)
+            if "quota" in error_str.lower() or "429" in error_str:
+                return Response(
+                    {'error': 'Gemini API Rate Limit Exceeded. Please try again in a few seconds.'},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                )
+            return Response(
+                {'error': f'RAG Flow failed: {error_str}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        # Persist assistant answer and link context chunks
+        assistant_msg = Message.objects.create(
+            conversation=conversation,
+            role='assistant',
+            content=answer,
+            tokens_used=0,
+        )
+        if chunks:
+            assistant_msg.context_chunks.set(chunks)
+
+        sources = [
+            {
+                'document_id': chunk.document_id,
+                'document_title': chunk.document.title,
+                'chunk_id': chunk.id,
+                'chunk_index': chunk.chunk_index,
+                'distance': float(getattr(chunk, 'distance', 0.0)),
+            }
+            for chunk in chunks
+        ]
+
+        return Response(
+            {
+                'conversation_id': conversation.id,
+                'question': question,
+                'answer': answer,
+                'sources': sources,
+            },
+            status=status.HTTP_200_OK,
+        )

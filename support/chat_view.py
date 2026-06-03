@@ -73,6 +73,112 @@ PRIORITY_MAP = {
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+def split_query_into_chunks(query: str, chunk_size: int = 300, overlap: int = 100) -> list:
+    """
+    Split user query into chunks if it is too long.
+    This helps in high-accuracy RAG by preventing embedding dilution of long queries.
+    """
+    query = query.strip()
+    if len(query) <= 400:
+        return [query]
+
+    # Split by sentence or fallback to word-based chunks
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', query)
+    
+    chunks = []
+    current_chunk = ""
+    
+    for sentence in sentences:
+        if len(current_chunk) + len(sentence) <= chunk_size:
+            current_chunk = (current_chunk + " " + sentence).strip()
+        else:
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = sentence
+            
+    if current_chunk:
+        chunks.append(current_chunk)
+        
+    # If chunks are too small or we got 0, fallback to character window
+    if not chunks:
+        step = chunk_size - overlap
+        for i in range(0, len(query), step):
+            c = query[i:i + chunk_size].strip()
+            if c:
+                chunks.append(c)
+                
+    return chunks
+
+
+def embed_query_chunks(chunks: list) -> list:
+    """Generate 768-dim embeddings for list of query chunks in batch via Gemini."""
+    if not chunks:
+        return []
+    # If single chunk, call normally
+    if len(chunks) == 1:
+        result = genai.embed_content(
+            model="models/gemini-embedding-001",
+            content=chunks[0],
+            output_dimensionality=768,
+        )
+        return [result['embedding']]
+    
+    # Batch call for multiple chunks
+    try:
+        result = genai.embed_content(
+            model="models/gemini-embedding-001",
+            content=chunks,
+            output_dimensionality=768,
+        )
+        return result['embedding']
+    except Exception as e:
+        # Fallback to single embedding generation if batch fails
+        embeddings = []
+        for chunk in chunks:
+            res = genai.embed_content(
+                model="models/gemini-embedding-001",
+                content=chunk,
+                output_dimensionality=768,
+            )
+            embeddings.append(res['embedding'])
+        return embeddings
+
+
+def fused_vector_search(query_embeddings: list, top_k: int = 5) -> list:
+    """
+    pgvector cosine distance search for multiple query embeddings.
+    Combines results using Reciprocal Rank Fusion (RRF) to select top_k unique chunks.
+    """
+    if not query_embeddings:
+        return []
+    
+    from collections import defaultdict
+    chunk_scores = defaultdict(float)
+    chunk_map = {}
+    
+    for q_emb in query_embeddings:
+        chunks = DocumentChunk.objects.raw(
+            """
+            SELECT dc.*, d.title AS doc_title
+            FROM support_documentchunk dc
+            JOIN support_document d ON dc.document_id = d.id
+            WHERE d.status = 'ready' AND d.is_active = true
+            ORDER BY dc.embedding <=> %s::vector
+            LIMIT %s
+            """,
+            [q_emb, top_k],
+        )
+        for rank, chunk in enumerate(chunks, 1):
+            # Reciprocal rank fusion: 1 / rank
+            chunk_scores[chunk.id] += 1.0 / rank
+            chunk_map[chunk.id] = chunk
+            
+    # Sort chunks by highest score first
+    sorted_ids = sorted(chunk_scores.keys(), key=lambda cid: chunk_scores[cid], reverse=True)[:top_k]
+    return [chunk_map[cid] for cid in sorted_ids]
+
+
 def embed_query(text: str) -> list:
     """Generate 768-dim embedding for user query via Gemini."""
     result = genai.embed_content(
@@ -191,17 +297,18 @@ class ChatView(APIView):
             content=user_message,
         )
 
-        # ── Step 1: Embed the query ───────────────────────────────────────
+        # ── Step 1: Chunk query if needed & embed ─────────────────────────
         try:
-            query_embedding = embed_query(user_message)
+            query_chunks = split_query_into_chunks(user_message)
+            query_embeddings = embed_query_chunks(query_chunks)
         except Exception as e:
             return Response(
                 {'error': f'Embedding failed: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # ── Step 2: pgvector cosine search (top 5) ────────────────────────
-        chunks = vector_search(query_embedding, top_k=5)
+        # ── Step 2: Fused pgvector cosine search (top 5) ──────────────────
+        chunks = fused_vector_search(query_embeddings, top_k=5)
 
         if not chunks:
             # No documents in the knowledge base yet
