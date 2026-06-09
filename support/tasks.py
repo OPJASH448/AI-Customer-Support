@@ -2,11 +2,14 @@ from celery import shared_task
 from django.core.mail import send_mail
 from django.conf import settings
 import os
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from PyPDF2 import PdfReader
 
-# Configure Gemini
-genai.configure(api_key=os.environ.get('GEMINI_API_KEY') or settings.GEMINI_API_KEY)
+# Gemini client (new google-genai SDK)
+_client = genai.Client(
+    api_key=os.environ.get('GEMINI_API_KEY') or settings.GEMINI_API_KEY
+)
 
 
 @shared_task
@@ -166,14 +169,14 @@ def count_tokens(text):
 
 
 def get_embedding(text):
-    """Call Google Gemini API for embeddings"""
+    """Call Google Gemini API for embeddings (google-genai SDK)"""
     try:
-        result = genai.embed_content(
-            model="models/gemini-embedding-001",
-            content=text,
-            output_dimensionality=768
+        response = _client.models.embed_content(
+            model="gemini-embedding-001",
+            contents=text,
+            config=genai_types.EmbedContentConfig(output_dimensionality=768),
         )
-        return result['embedding']
+        return list(response.embeddings[0].values)
     except Exception as e:
         raise ValueError(f"Error getting embedding from Gemini: {str(e)}")
 

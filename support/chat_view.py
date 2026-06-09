@@ -2,31 +2,36 @@
 Hybrid RAG Chat Endpoint — POST /api/chat/
 
 Full pipeline:
-  1. Embed query (Gemini gemini-embedding-001)
-  2. Hybrid RAG retrieval:
-       a) Dense  — pgvector HNSW cosine similarity
-       b) Sparse — BM25 keyword search (rank_bm25)
+  1. Hybrid RAG retrieval:
+       a) Dense  — pgvector HNSW cosine similarity (Gemini 768-dim embeddings)
+       b) Sparse — BM25 keyword search (rank_bm25, in-memory)
        c) Merge  — Reciprocal Rank Fusion (RRF, k=60)
-  3. Build grounded context prompt
-  4. Gemini 2.0 Flash generation with source citation
-  5. Token logging + escalation detection
+  2. Build grounded context prompt
+  3. Gemini 2.0 Flash generation with source citation (google-genai SDK)
+  4. Token logging + escalation detection
+
+Uses google-genai SDK (replaces deprecated google-generativeai).
 """
 import os
-from datetime import datetime
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 
-from .models import Document, DocumentChunk, Conversation, Message, EscalationTicket
+from .models import Conversation, Message, EscalationTicket
 from .token_logger import log_token_usage
 from .rag import hybrid_retrieve  # ← Hybrid RAG engine
 
-# Configure Gemini
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY)
+# ── Gemini client (new google-genai SDK) ──────────────────────────────────────
+_client = genai.Client(
+    api_key=os.environ.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY
+)
+
+GEN_MODEL = "gemini-2.0-flash"
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -61,7 +66,6 @@ INABILITY_PHRASES = [
     "i'm not sure based on",
 ]
 
-# Keyword → priority score mapping (higher = more urgent)
 URGENCY_KEYWORDS = {
     5: ["urgent", "critical", "emergency", "severe", "immediately", "asap", "crash", "down", "outage", "security breach"],
     4: ["important", "broken", "failing", "not working", "blocked", "production", "deadline"],
@@ -77,7 +81,7 @@ PRIORITY_MAP = {5: "critical", 4: "high", 3: "medium", 2: "low", 1: "low"}
 
 def build_context(chunks: list) -> tuple:
     """
-    Join top hybrid-retrieved chunks with source document name prefixed.
+    Join hybrid-retrieved chunks with source document name prefixed.
     Returns (context_string, deduplicated_sources_list).
     """
     context_parts = []
@@ -122,7 +126,7 @@ class ChatView(APIView):
             "answer": "The motor uses PWM... [Motor Guide]",
             "sources": ["Motor Guide"],
             "retrieval_method": "hybrid",
-            "retrieval_breakdown": {"dense_candidates": 10, "sparse_candidates": 8, "final_chunks": 5},
+            "retrieval_breakdown": {"final_chunks": 5, "retrievers": [...], "fusion": "..."},
             "escalated": false,
             "ticket_id": null,
             "conversation_id": 1,
@@ -167,8 +171,8 @@ class ChatView(APIView):
         )
 
         # ── Hybrid RAG Retrieval ──────────────────────────────────────────────
-        # hybrid_retrieve() internally runs:
-        #   1) Dense: pgvector HNSW cosine similarity (Gemini embeddings)
+        # hybrid_retrieve() runs:
+        #   1) Dense:  pgvector HNSW cosine similarity (Gemini embeddings)
         #   2) Sparse: BM25 keyword search (rank_bm25, in-memory)
         #   3) Fusion: Reciprocal Rank Fusion (RRF, k=60)
         try:
@@ -190,17 +194,18 @@ class ChatView(APIView):
             context_text, sources = build_context(chunks)
 
         # ── Build prompt & call Gemini 2.0 Flash ─────────────────────────────
-        user_prompt = (
+        full_prompt = (
+            f"{SYSTEM_PROMPT}\n\n"
             f"Context Documents:\n{context_text}\n\n"
             f"Customer Question:\n{user_message}\n\n"
             "Provide a helpful, accurate answer. Cite document names in [brackets]."
         )
 
         try:
-            model = genai.GenerativeModel("gemini-2.0-flash")
-            response = model.generate_content(
-                f"{SYSTEM_PROMPT}\n\n{user_prompt}",
-                generation_config=genai.types.GenerationConfig(
+            response = _client.models.generate_content(
+                model=GEN_MODEL,
+                contents=full_prompt,
+                config=genai_types.GenerateContentConfig(
                     temperature=0.3,
                     max_output_tokens=1000,
                 ),
