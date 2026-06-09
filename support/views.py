@@ -22,7 +22,7 @@ from .serializers import (
     RAGAskSerializer,
 )
 from .tasks import process_document
-from .rag import embed_query, retrieve_similar_chunks, generate_grounded_answer
+from .rag import hybrid_retrieve, generate_grounded_answer
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
@@ -278,11 +278,12 @@ class AnalyticsView(APIView):
 class RAGAskView(APIView):
     """
     POST /api/support/rag/ask/
-    End-to-end RAG flow:
-      1) Embed user question
-      2) Retrieve top-k nearest chunks via pgvector cosine distance (HNSW accelerated)
-      3) Generate grounded answer from retrieved context
-      4) Persist user/assistant messages and linked context chunks
+    Hybrid RAG flow:
+      1) Dense retrieval  — pgvector HNSW cosine similarity (Gemini 768-dim embeddings)
+      2) Sparse retrieval — BM25 keyword search (rank_bm25, in-memory)
+      3) RRF fusion       — Reciprocal Rank Fusion (k=60) to merge ranked lists
+      4) Generate grounded answer from top-k fused chunks via Gemini 2.0 Flash
+      5) Persist user/assistant messages and linked context chunks
     """
     permission_classes = [IsAuthenticated]
 
@@ -312,28 +313,31 @@ class RAGAskView(APIView):
             )
 
         # Persist user message
-        user_msg = Message.objects.create(
+        Message.objects.create(
             conversation=conversation,
             role='user',
             content=question,
             tokens_used=0,
         )
 
-        # RAG retrieval and grounded generation
+        # ── Hybrid RAG: dense + BM25 + RRF fusion ─────────────────────────────
         try:
-            query_embedding = embed_query(question)
-            chunks = retrieve_similar_chunks(query_embedding, user=request.user, top_k=top_k)
+            chunks = hybrid_retrieve(
+                question=question,
+                user=request.user,
+                top_k=top_k,
+            )
             answer = generate_grounded_answer(question, chunks)
         except Exception as e:
             error_str = str(e)
-            if "quota" in error_str.lower() or "429" in error_str:
+            if 'quota' in error_str.lower() or '429' in error_str:
                 return Response(
                     {'error': 'Gemini API Rate Limit Exceeded. Please try again in a few seconds.'},
-                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
                 )
             return Response(
-                {'error': f'RAG Flow failed: {error_str}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {'error': f'Hybrid RAG failed: {error_str}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         # Persist assistant answer and link context chunks
@@ -352,7 +356,6 @@ class RAGAskView(APIView):
                 'document_title': chunk.document.title,
                 'chunk_id': chunk.id,
                 'chunk_index': chunk.chunk_index,
-                'distance': float(getattr(chunk, 'distance', 0.0)),
             }
             for chunk in chunks
         ]
@@ -363,6 +366,12 @@ class RAGAskView(APIView):
                 'question': question,
                 'answer': answer,
                 'sources': sources,
+                'retrieval_method': 'hybrid',
+                'retrieval_breakdown': {
+                    'retrievers': ['dense_pgvector_hnsw', 'sparse_bm25'],
+                    'fusion': 'reciprocal_rank_fusion',
+                    'final_chunks': len(chunks),
+                },
             },
             status=status.HTTP_200_OK,
         )

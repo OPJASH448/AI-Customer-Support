@@ -2,9 +2,9 @@
 
 <div align="center">
 
-**A production-ready AI-powered customer support system with RAG vector search**
+**A production-ready AI-powered customer support system with Hybrid RAG (Dense + BM25 + RRF)**
 
-Built with Django 4.2 · Google Gemini · pgvector · Celery · Docker
+Built with Django 4.2 · Google Gemini · pgvector · BM25 · Celery · Docker
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
 [![Django](https://img.shields.io/badge/Django-4.2_LTS-092E20?style=flat&logo=django&logoColor=white)](https://djangoproject.com)
@@ -44,10 +44,11 @@ AI Customer Support Agent is an intelligent customer support system that uses **
 ## 🚀 Features
 
 ### Core AI Capabilities
-- 🧠 **RAG-Powered Responses** — Semantic document search using pgvector + Gemini embeddings
+- 🧠 **Hybrid RAG Responses** — Combines **Dense** (pgvector cosine) + **Sparse** (BM25 keyword) retrieval, merged via **Reciprocal Rank Fusion (RRF)** for superior accuracy
 - 📄 **Document Processing** — Upload PDF/TXT files, auto-chunk with token overlap, embed into 768-dim vectors
 - 💬 **Multi-turn Conversations** — Track conversation history with context-aware AI responses
-- 🎯 **Context Retrieval** — Top-K cosine similarity search (`<=>`) for the most relevant document chunks
+- 🎯 **Dual Retrieval Pipeline** — Dense: HNSW cosine similarity; Sparse: BM25 keyword scoring; Fused via RRF (k=60)
+- 🔑 **Best-of-Both-Worlds** — Dense retrieval excels at semantic/conceptual queries; BM25 catches exact keywords, product codes, and named entities that embeddings miss
 
 ### Platform Features
 - 🔐 **JWT Authentication** — Secure token-based auth with 60-min access / 1-day refresh
@@ -83,12 +84,22 @@ AI Customer Support Agent is an intelligent customer support system that uses **
                     └─────────────────────┼───────────────────────┘
                                           │
                     ┌─────────────────────▼───────────────────────┐
-                    │            RAG Pipeline Engine               │
-                    │  ┌──────┐  ┌─────────┐  ┌───────────────┐  │
-                    │  │Chunk │→ │ Embed   │→ │  Retrieve &   │  │
-                    │  │Text  │  │(Gemini) │  │  Generate     │  │
-                    │  └──────┘  └─────────┘  └───────────────┘  │
-                    └──────┬──────────────────────────┬───────────┘
+                    │         Hybrid RAG Pipeline Engine           │
+                    │                                             │
+                    │  User Query                                 │
+                    │      │                                      │
+                    │      ├──► Dense Retriever (pgvector HNSW) ──┤
+                    │      │    Gemini 768-dim cosine similarity   │
+                    │      │                                      │
+                    │      └──► Sparse Retriever (BM25)       ────┤
+                    │           rank_bm25 keyword scoring          │
+                    │                    │                        │
+                    │           RRF Fusion (k=60)                 │
+                    │                    │                        │
+                    │              Top-K Chunks                   │
+                    │                    │                        │
+                    │           Gemini 2.0 Flash                  │
+                    └─────────────────────────────────────────────┘
                            │                          │
               ┌────────────▼──────┐      ┌────────────▼──────┐
               │   PostgreSQL 16   │      │   Google Gemini   │
@@ -112,8 +123,10 @@ AI Customer Support Agent is an intelligent customer support system that uses **
 | **API** | Django REST Framework | 3.14 | RESTful endpoints |
 | **Auth** | SimpleJWT | 5.2 | JWT authentication |
 | **AI / LLM** | Google Gemini | 2.0 Flash | Response generation |
-| **Embeddings** | Gemini Embedding | 001 | 768-dim vector embeddings |
+| **Embeddings** | Gemini Embedding | 001 | 768-dim vector embeddings (dense retrieval) |
 | **Vector DB** | pgvector | 0.4.2 | PostgreSQL vector similarity search + HNSW index |
+| **Sparse Retrieval** | rank-bm25 | 0.2.2+ | BM25 keyword retrieval (pure Python, Render-safe) |
+| **RAG Fusion** | Custom RRF | — | Reciprocal Rank Fusion (k=60) merges dense + sparse |
 | **Database** | PostgreSQL | 16 | Primary data store |
 | **Cache/Broker** | Redis | 7 | Celery task broker |
 | **Async Tasks** | Celery | 5.3 | Background job processing |
@@ -442,31 +455,31 @@ Extended user profile.
 
 ## 🧠 RAG Pipeline
 
-The Retrieval Augmented Generation pipeline is the core intelligence of this system:
+The **Hybrid** Retrieval Augmented Generation pipeline is the core intelligence of this system.
 
 ### How It Works
 
 ```
-1. INGEST                    2. QUERY                     3. RESPOND
-─────────────               ─────────────                ─────────────
-┌─────────┐                 ┌─────────┐                  ┌──────────┐
-│  Upload  │                │  User   │                  │  Gemini  │
-│  PDF/TXT │                │  Query  │                  │  2.0     │
-└────┬─────┘                └────┬────┘                  │  Flash   │
-     │                           │                       └────┬─────┘
-     ▼                           ▼                            │
-┌─────────┐                 ┌─────────┐                       │
-│  Extract │                │  Embed  │                       ▼
-│  Text    │                │  Query  │               ┌──────────────┐
-└────┬─────┘                └────┬────┘               │   Generate   │
-     │                           │                    │   Response   │
-     ▼                           ▼                    │  with context│
-┌─────────┐                 ┌──────────┐              └──────────────┘
-│  Chunk  │                 │  Vector  │                      ▲
-│  500tok │                 │  Search  │──────────────────────┘
-│  50 ovl │                 │  Top-5   │        Retrieved chunks
-└────┬────┘                 │  <->     │        as context
-     │                      └──────────┘
+1. INGEST                    2. QUERY (HYBRID RAG)                3. RESPOND
+─────────────               ──────────────────────────           ─────────────
+┌─────────┐                 ┌─────────┐                          ┌──────────┐
+│  Upload  │                │  User   │                          │  Gemini  │
+│  PDF/TXT │                │  Query  │                          │  2.0     │
+└────┬─────┘                └────┬────┘                          │  Flash   │
+     │                           │                               └────┬─────┘
+     ▼                     ┌─────┴──────┐                             │
+┌─────────┐                │            │                             ▼
+│  Extract │          ┌────▼────┐  ┌────▼────┐               ┌──────────────┐
+│  Text    │          │ Dense   │  │ Sparse  │               │   Generate   │
+└────┬─────┘          │pgvector │  │  BM25   │               │   Response   │
+     │                │  HNSW   │  │keyword  │               │  with context│
+     ▼                └────┬────┘  └────┬────┘               └──────────────┘
+┌─────────┐                │            │                             ▲
+│  Chunk  │                └─────┬──────┘                             │
+│  500tok │                      │                                    │
+│  50 ovl │             RRF Fusion (k=60)                             │
+└────┬────┘                      │                    ───────────────-┘
+     │                    Top-K Fused Chunks       retrieved as context
      ▼
 ┌──────────┐
 │  Embed   │
@@ -481,6 +494,18 @@ The Retrieval Augmented Generation pipeline is the core intelligence of this sys
 └──────────┘
 ```
 
+### Why Hybrid RAG?
+
+| Query Type | Dense (pgvector) | Sparse (BM25) | Hybrid |
+|---|---|---|---|
+| `"how does authentication work?"` | ✅ Strong | ⚠️ Weak | ✅ Best |
+| `"error code ERR_AUTH_4021"` | ⚠️ Weak | ✅ Strong | ✅ Best |
+| `"tell me about JWT refresh tokens"` | ✅ Strong | ✅ OK | ✅ Best |
+| `"invoice #INV-2024-00123"` | ⚠️ Miss | ✅ Exact match | ✅ Best |
+
+**RRF formula**: `score(chunk) = Σ 1 / (60 + rank_i)`
+Chunks appearing in BOTH lists receive compounded scores and float to the top.
+
 ### Configuration
 
 | Parameter | Value | Description |
@@ -490,12 +515,15 @@ The Retrieval Augmented Generation pipeline is the core intelligence of this sys
 | Generation Model | `gemini-2.0-flash` | Response generation |
 | Chunk Size | 500 tokens | Window size for splitting |
 | Chunk Overlap | 50 tokens | Sliding window overlap |
-| Top-K Retrieval | 5 | Number of chunks retrieved |
-| Max Output Tokens | 600–1000 | Response length limit |
+| Top-K Retrieval | 5 | Final chunks after RRF fusion |
+| Dense Candidates | 10 | pgvector HNSW fetches before fusion |
+| Sparse Candidates | 10 | BM25 candidates before fusion |
+| Max Output Tokens | 1000 | Response length limit |
 | Temperature | 0.3 | Response creativity (low = factual) |
 | Vector Index | HNSW (`vector_cosine_ops`) | pgvector ANN index — O(log N) search |
-| Query Chunking | Auto (>400 chars) | Long queries split to prevent embedding dilution |
-| Fusion Strategy | Reciprocal Rank Fusion (RRF) | Multi-chunk results merged by 1/rank scoring |
+| BM25 Library | `rank-bm25` (BM25Okapi) | Pure Python, in-memory, Render-safe |
+| RRF Constant (k) | 60 | Standard industry value |
+| Fusion Strategy | Reciprocal Rank Fusion (RRF) | Dense + sparse results merged by 1/(k+rank) |
 
 ---
 
@@ -627,13 +655,53 @@ See [.env.example](.env.example) for the full template.
 - Added proper HTTP 429 handling in `RAGAskView` for Gemini rate limits
 - Fixed `document.documentchunk_set` → `document.chunks` reverse relation throughout codebase
 
-### ✅ Phase 4 — Full Frontend UI (Completed)
-- **Django Templates with HTMX & Tailwind CDN** — Zero build step, zero npm, production-ready frontend UI.
-- **Chat Interface** — Floating chat panel, auto-resizing text areas, Markdown/citation rendering, and typing animations.
-- **Agent Dashboard** — Real-time metrics (Total Chats, Escalation %, Avg Resolution Time) and a color-coded ticket priority table.
-- **Ticket Resolution UI** — In-line modal for agents to resolve tickets directly from the dashboard.
-- **Document Manager** — Drag-and-drop file uploads for PDFs/TXTs with real-time status indicators (Processing, Ready, Failed).
-- **Session Authentication** — Seamlessly integrated frontend session auth alongside the REST API's JWT auth.
+### ✅ Phase 5 — Hybrid RAG (Completed)
+
+#### What Changed
+- **Replaced dense-only RAG** with a full **Hybrid RAG** pipeline in all three retrieval paths:
+  - `POST /api/chat/` (primary chat endpoint)
+  - `POST /api/support/rag/ask/` (RAG ask endpoint)
+  - `rag_utils.retrieve_context()` (utility function)
+
+#### Dense Retrieval (unchanged, improved)
+- pgvector HNSW cosine similarity with Gemini `gemini-embedding-001` 768-dim embeddings
+- Now fetches **10 candidates** (`DENSE_TOP_K=10`) before fusion (up from 5)
+
+#### Sparse Retrieval (new)
+- **BM25Okapi** via `rank-bm25>=0.2.2` — pure Python, zero native dependencies
+- In-memory corpus built from `DocumentChunk.content` at query time — **no new DB table or migration**
+- Simple but effective tokenizer: lowercase → strip punctuation → split on whitespace
+- Fetches top **10 BM25 candidates** before fusion
+
+#### Reciprocal Rank Fusion — RRF (enhanced)
+- Standard `k=60` constant — industry-proven for balancing precision vs recall
+- Formula: `score(chunk) = Σ 1 / (60 + rank_i)` summed across both retrievers
+- Chunks appearing in **both** dense and sparse results receive compounded scores
+- **No dependency on initial scores** — only ranks matter, making fusion robust across incompatible scoring scales
+
+#### Graceful Degradation
+- If BM25 returns no keyword hits → falls back to dense-only results
+- If dense fails (Gemini API error) → falls back to BM25-only results
+- If both fail → returns empty list with error logged
+
+#### Response Transparency
+- Both `/api/chat/` and `/api/support/rag/ask/` now return:
+  ```json
+  {
+    "retrieval_method": "hybrid",
+    "retrieval_breakdown": {
+      "retrievers": ["dense_pgvector_hnsw", "sparse_bm25"],
+      "fusion": "reciprocal_rank_fusion",
+      "final_chunks": 5
+    }
+  }
+  ```
+
+#### Render Deployment Safety
+- `rank-bm25` is pure Python — **no C extensions, no build tools** required on Render
+- **Zero new migrations** — BM25 runs in-memory
+- **Zero new environment variables**
+- **Zero new Render services**
 
 ---
 
