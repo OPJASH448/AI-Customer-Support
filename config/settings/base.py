@@ -16,8 +16,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 APPS_DIR = BASE_DIR
 
 # SECURITY
-SECRET_KEY = env('SECRET_KEY', default='django-insecure-dev-key-change-in-production')
 DEBUG = env('DEBUG', default=False)
+if isinstance(DEBUG, str):
+    DEBUG = DEBUG.lower() in ('true', '1', 'yes')
+
+SECRET_KEY = env('SECRET_KEY', default='django-insecure-change-me-in-production-with-50-char-random-key')
+if 'django-insecure-' in SECRET_KEY and not DEBUG:
+    raise ValueError('SECRET_KEY must be set via environment variable in production')
+
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1', '.onrender.com'])
 
 # Application definition
@@ -108,7 +114,8 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
+static_dir = os.path.join(BASE_DIR, 'static')
+STATICFILES_DIRS = [static_dir] if os.path.isdir(static_dir) else []
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Media files
@@ -164,3 +171,21 @@ GEMINI_API_KEY = env('GEMINI_API_KEY', default='')
 
 # Vector Search (pgvector)
 PGVECTOR_DIMENSION = 768  # Google Gemini embedding dimension
+
+# File upload limits (2 MB default — production.py overrides if needed)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024   # 2 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024   # 2 MB
+
+# DRF throttling — protect the chat endpoint from abuse
+# Keeps request rate below Gemini free tier (~15 req/min) since each chat
+# message consumes 2 Gemini API calls (embed + generate).
+REST_FRAMEWORK.update({
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '5/min',   # unauthenticated: very restrictive
+        'user': '8/min',   # authenticated: ~1 msg per 7.5s, safely below Gemini free tier
+    },
+})

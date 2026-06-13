@@ -1,15 +1,30 @@
 services:
+  # ── Web Service ─────────────────────────────────────────────────────────────
   - type: web
     name: support-agent-web
     env: python
-    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput
-    preDeployCommand: python manage.py migrate
-    startCommand: gunicorn config.wsgi:application
+    plan: free
+    region: singapore          # closest to India
+    buildCommand: >
+      pip install -r requirements.txt &&
+      python manage.py collectstatic --noinput --settings=config.settings.production &&
+      python manage.py migrate --settings=config.settings.production
+    startCommand: >
+      gunicorn config.wsgi:application
+      --workers 2
+      --threads 2
+      --timeout 120
+      --bind 0.0.0.0:$PORT
+      --log-level info
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: config.settings.production
       - key: RENDER
         value: "true"
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: SECRET_KEY
+        generateValue: true
       - key: DATABASE_URL
         fromDatabase:
           name: support-db
@@ -17,20 +32,38 @@ services:
       - key: REDIS_URL
         fromService:
           name: support-redis
+          type: redis
           property: connectionString
       - key: GEMINI_API_KEY
-        sync: false
+        sync: false           # set manually in Render dashboard
+      - key: ALLOWED_HOSTS
+        value: ".onrender.com"
+      - key: WEB_CONCURRENCY
+        value: "2"
 
+  # ── Celery Worker ────────────────────────────────────────────────────────────
   - type: worker
     name: support-agent-worker
     env: python
+    plan: free
+    region: singapore
     buildCommand: pip install -r requirements.txt
-    startCommand: celery -A config worker --loglevel=info
+    startCommand: >
+      celery -A config worker
+      --loglevel=info
+      --concurrency=1
+      --pool=solo
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: config.settings.production
       - key: RENDER
         value: "true"
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: SECRET_KEY
+        fromService:
+          name: support-agent-web
+          envVarKey: SECRET_KEY
       - key: DATABASE_URL
         fromDatabase:
           name: support-db
@@ -38,14 +71,22 @@ services:
       - key: REDIS_URL
         fromService:
           name: support-redis
+          type: redis
           property: connectionString
       - key: GEMINI_API_KEY
-        sync: false
+        sync: false           # set manually in Render dashboard
 
+# ── PostgreSQL Database ──────────────────────────────────────────────────────
 databases:
   - name: support-db
     databaseName: customer_support
     user: postgres
+    plan: free
+    region: singapore
 
+# ── Redis ────────────────────────────────────────────────────────────────────
 redis:
   - name: support-redis
+    plan: free
+    region: singapore
+    ipAllowList: []

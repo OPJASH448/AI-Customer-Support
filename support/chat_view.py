@@ -13,6 +13,7 @@ Full pipeline:
 Uses google-genai SDK (replaces deprecated google-generativeai).
 """
 import os
+import time
 
 from google import genai
 from google.genai import types as genai_types
@@ -24,14 +25,14 @@ from rest_framework import status
 
 from .models import Conversation, Message, EscalationTicket
 from .token_logger import log_token_usage
-from .rag import hybrid_retrieve  # ← Hybrid RAG engine
+from .rag import hybrid_retrieve, _is_rate_limit_error  # ← Hybrid RAG engine
 
 # ── Gemini client (new google-genai SDK) ──────────────────────────────────────
 _client = genai.Client(
     api_key=os.environ.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY
 )
 
-GEN_MODEL = "gemini-2.0-flash"
+GEN_MODEL = "gemini-2.5-flash"
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -202,18 +203,56 @@ class ChatView(APIView):
         )
 
         try:
-            response = _client.models.generate_content(
-                model=GEN_MODEL,
-                contents=full_prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=0.3,
-                    max_output_tokens=1000,
-                ),
-            )
+            _retry_delay = 5.0
+            _last_exc = None
+            _response = None
+            for _attempt in range(4):  # up to 3 retries: 5s → 15s → 45s
+                try:
+                    _response = _client.models.generate_content(
+                        model=GEN_MODEL,
+                        contents=full_prompt,
+                        config=genai_types.GenerateContentConfig(
+                            temperature=0.3,
+                            max_output_tokens=1000,
+                        ),
+                    )
+                    _last_exc = None
+                    break  # success
+                except Exception as _exc:
+                    _last_exc = _exc
+                    if _is_rate_limit_error(_exc) and _attempt < 3:
+                        import logging as _lg
+                        _lg.getLogger(__name__).warning(
+                            "ChatView: Gemini rate limit — retrying in %.0fs (attempt %d/3)",
+                            _retry_delay, _attempt + 1,
+                        )
+                        time.sleep(_retry_delay)
+                        _retry_delay *= 3
+                    else:
+                        raise
+            if _last_exc:
+                raise _last_exc
+            response = _response
             assistant_text = response.text
         except Exception as e:
+            err_str = str(e)
+            # Detect Gemini rate limit (HTTP 429)
+            if '429' in err_str or 'quota' in err_str.lower() or 'rate' in err_str.lower() and 'limit' in err_str.lower():
+                return Response(
+                    {
+                        'error': (
+                            'Rate limit reached on the Gemini API. '
+                            'The free tier allows ~15 requests/minute and 1,500 requests/day. '
+                            'Please wait 60 seconds before trying again, or upgrade your Gemini API plan at '
+                            'https://aistudio.google.com/apikey'
+                        ),
+                        'error_code': 'RATE_LIMITED',
+                        'retry_after_seconds': 60,
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
             return Response(
-                {"error": f"Gemini generation failed: {str(e)}"},
+                {'error': f'AI generation failed: {err_str}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 

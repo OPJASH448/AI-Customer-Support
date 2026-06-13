@@ -290,6 +290,51 @@
           banner.classList.remove('hidden');
           document.getElementById('ticket-id-display').textContent = data.ticket_id || '—';
         }
+      } else if (resp.status === 429) {
+        // Rate limit — show countdown timer so user knows exactly when to retry
+        const waitSecs = data.retry_after_seconds || 60;
+        const sendBtn = document.getElementById('send-btn');
+        const chatInput = document.getElementById('chat-input');
+
+        // Build the rate-limit message bubble
+        const container = document.getElementById('messages');
+        const div = document.createElement('div');
+        div.className = 'flex items-start gap-3 animate-fade-in';
+        div.innerHTML = `
+          <div class="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center">
+            <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          </div>
+          <div class="max-w-lg">
+            <div class="bg-amber-500/10 border border-amber-500/30 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-amber-200 leading-relaxed">
+              ⏳ <strong>Gemini rate limit reached.</strong><br/>
+              The free tier allows ~15 API requests/minute. Please wait
+              <span id="rl-countdown" class="font-bold text-amber-300">${waitSecs}s</span> before sending again.<br/>
+              <span class="text-xs text-amber-400/70 mt-1 block">Tip: to avoid this, space your messages a few seconds apart.</span>
+            </div>
+            <div class="text-xs text-slate-600 mt-1 ml-1">AI Agent · just now</div>
+          </div>`;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+
+        // Disable input during cooldown
+        sendBtn.disabled = true;
+        chatInput.disabled = true;
+        sendBtn.classList.add('opacity-40', 'cursor-not-allowed');
+
+        let remaining = waitSecs;
+        const countdownEl = document.getElementById('rl-countdown');
+        const timer = setInterval(() => {
+          remaining--;
+          if (countdownEl) countdownEl.textContent = remaining + 's';
+          if (remaining <= 0) {
+            clearInterval(timer);
+            sendBtn.disabled = false;
+            chatInput.disabled = false;
+            sendBtn.classList.remove('opacity-40', 'cursor-not-allowed');
+            if (countdownEl) countdownEl.textContent = '✓ Ready!';
+            chatInput.focus();
+          }
+        }, 1000);
       } else {
         appendMessage('assistant', '⚠️ ' + (data.error || 'Something went wrong. Please try again.'), []);
       }

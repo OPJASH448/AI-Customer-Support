@@ -23,6 +23,7 @@ Uses google-genai SDK (replaces deprecated google-generativeai).
 
 import os
 import re
+import time
 import logging
 from typing import List, Optional
 
@@ -36,6 +37,37 @@ from .models import DocumentChunk
 
 logger = logging.getLogger(__name__)
 
+
+# ── Retry / backoff helper ─────────────────────────────────────────────────────
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Return True when the exception looks like a Gemini 429 / quota error."""
+    msg = str(exc).lower()
+    return any(kw in msg for kw in ('429', 'quota', 'rate limit', 'resource_exhausted', 'rateLimitExceeded'.lower()))
+
+
+def _call_with_backoff(fn, *args, max_retries: int = 3, base_delay: float = 5.0, **kwargs):
+    """
+    Call *fn* with exponential back-off when a Gemini rate-limit error occurs.
+
+    Retry schedule (seconds): 5 → 15 → 45
+    Raises the original exception if all retries are exhausted.
+    """
+    delay = base_delay
+    for attempt in range(max_retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if _is_rate_limit_error(exc) and attempt < max_retries:
+                logger.warning(
+                    "Gemini rate limit hit — retrying in %.0fs (attempt %d/%d): %s",
+                    delay, attempt + 1, max_retries, exc,
+                )
+                time.sleep(delay)
+                delay *= 3  # exponential back-off: 5 → 15 → 45
+            else:
+                raise
+
 # ── Gemini client (new google-genai SDK) ──────────────────────────────────────
 _client = genai.Client(
     api_key=os.environ.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY
@@ -46,7 +78,7 @@ RRF_K = 60          # Standard RRF constant — balances precision vs. recall
 DENSE_TOP_K = 10    # Candidates fetched from dense retriever before fusion
 SPARSE_TOP_K = 10   # Candidates fetched from sparse retriever before fusion
 EMBED_MODEL = "gemini-embedding-001"
-GEN_MODEL = "gemini-2.0-flash"
+GEN_MODEL = "gemini-2.5-flash"
 
 
 # ── Tokeniser (shared between BM25 and query splitting) ───────────────────────
@@ -63,14 +95,17 @@ def _tokenize(text: str) -> List[str]:
 def embed_query(question: str) -> List[float]:
     """
     Create a 768-dim query embedding via Gemini gemini-embedding-001.
-    Uses the new google-genai SDK.
+    Uses the new google-genai SDK.  Retries automatically on rate-limit errors.
     """
-    response = _client.models.embed_content(
-        model=EMBED_MODEL,
-        contents=question,
-        config=genai_types.EmbedContentConfig(output_dimensionality=768),
-    )
-    return list(response.embeddings[0].values)
+    def _do_embed():
+        response = _client.models.embed_content(
+            model=EMBED_MODEL,
+            contents=question,
+            config=genai_types.EmbedContentConfig(output_dimensionality=768),
+        )
+        return list(response.embeddings[0].values)
+
+    return _call_with_backoff(_do_embed)
 
 
 def _dense_retrieve(question_embedding: List[float], queryset, top_k: int) -> List:
@@ -258,8 +293,11 @@ def generate_grounded_answer(question: str, chunks: List) -> str:
         f"Retrieved Context:\n{context}\n"
     )
 
-    response = _client.models.generate_content(
-        model=GEN_MODEL,
-        contents=prompt,
-    )
+    def _do_generate():
+        return _client.models.generate_content(
+            model=GEN_MODEL,
+            contents=prompt,
+        )
+
+    response = _call_with_backoff(_do_generate)
     return (response.text or "I could not generate a response.").strip()
