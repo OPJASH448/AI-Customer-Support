@@ -6,7 +6,33 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.views import APIView
 from django.db.models import Avg, Count, Q, F
 from django.utils import timezone
+from celery import current_app as celery_app
 from kombu.exceptions import OperationalError
+import logging
+import threading
+
+logger = logging.getLogger(__name__)
+
+
+INLINE_PROCESSING_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _celery_worker_is_available() -> bool:
+    """Return True when at least one Celery worker responds to a ping."""
+    try:
+        inspector = celery_app.control.inspect(timeout=1.0)
+        return bool(inspector and inspector.ping())
+    except Exception:
+        return False
+
+
+def _should_process_inline(document) -> bool:
+    """Process small documents inline so short uploads complete in one request."""
+    try:
+        file_size = getattr(document.file, "size", None)
+        return file_size is None or file_size <= INLINE_PROCESSING_MAX_BYTES
+    except Exception:
+        return True
 
 
 from .models import Document, DocumentChunk, Conversation, Message, EscalationTicket
@@ -40,43 +66,47 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return DocumentSerializer
 
     def create(self, request, *args, **kwargs):
-        """Upload a document (PDF or TXT)"""
-        # Ensure multipart/form-data was used and file is present
+        """Upload a document (PDF or TXT) — returns instantly, processes in background thread."""
         file_obj = None
         if 'file' in request.FILES:
             file_obj = request.FILES.get('file')
 
-        # Combine data and files into a mutable dict for the serializer
         data = request.data.copy()
         if file_obj is not None:
             data['file'] = file_obj
 
         serializer = self.get_serializer(data=data)
         if serializer.is_valid():
-            # Create document and attach file
             document = serializer.save(uploaded_by=request.user, status='processing')
 
-            # Dispatch async ingestion task to Celery worker.
-            task_status_message = 'Document uploaded successfully. Processing started.'
-            try:
-                process_document.delay(document.id)
-            except OperationalError:
-                task_status_message = (
-                    'Document uploaded, but background processing queue is unavailable. '
-                    'Start Redis/Celery and retry processing.'
-                )
-            except Exception:
-                task_status_message = (
-                    'Document uploaded, but task dispatch failed unexpectedly. '
-                    'Check Celery worker logs and retry processing.'
-                )
+            # ── Always process in a daemon background thread ──────────────
+            # This means the HTTP response returns IMMEDIATELY (no timeout).
+            # The thread handles: text extraction → chunking → Gemini embedding → DB save.
+            # Works on Render free with NO Celery / Redis required.
+            def _bg_process(doc_id):
+                try:
+                    logger.info("[BG] Starting processing for document %s", doc_id)
+                    process_document(doc_id)
+                    logger.info("[BG] Finished processing for document %s", doc_id)
+                except Exception as exc:
+                    logger.exception("[BG] Processing failed for document %s: %s", doc_id, exc)
+
+            thread = threading.Thread(
+                target=_bg_process,
+                args=(document.id,),
+                daemon=True,
+                name=f"doc-process-{document.id}",
+            )
+            thread.start()
+            logger.info("[BG] Spawned processing thread for document %s", document.id)
 
             return Response(
                 {
-                    'message': task_status_message,
-                    'document': DocumentSerializer(document).data
+                    'message': 'Document uploaded! Processing started in background — status will update shortly.',
+                    'document': DocumentSerializer(document).data,
+                    'async': True,
                 },
-                status=status.HTTP_201_CREATED
+                status=status.HTTP_201_CREATED,
             )
 
         # Return clearer error when file missing or wrong encoding
@@ -97,15 +127,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'])
     def status(self, request, pk=None):
-        """Get document processing status"""
+        """Get document processing status with chunk progress."""
         document = self.get_object()
+        chunk_count = document.chunks.count()
         return Response({
             'id': document.id,
             'title': document.title,
             'status': document.status,
-            'chunk_count': document.chunks.count(),
+            'chunk_count': chunk_count,
+            'is_ready': document.status == 'ready',
             'created_at': document.created_at,
-            'updated_at': document.updated_at
+            'updated_at': document.updated_at,
         })
 
 
