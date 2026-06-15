@@ -10,7 +10,7 @@ from support.chat_view import ChatView
 from support.views import TicketListView, TicketResolveView, AnalyticsView
 
 
-@api_view(['GET'])
+@api_view(['GET', 'HEAD'])
 @permission_classes([AllowAny])
 def api_root(request):
     """API root — returns JSON for API clients, redirects browsers to the UI."""
