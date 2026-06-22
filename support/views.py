@@ -6,33 +6,9 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.views import APIView
 from django.db.models import Avg, Count, Q, F
 from django.utils import timezone
-from celery import current_app as celery_app
-from kombu.exceptions import OperationalError
 import logging
-import threading
 
 logger = logging.getLogger(__name__)
-
-
-INLINE_PROCESSING_MAX_BYTES = 2 * 1024 * 1024
-
-
-def _celery_worker_is_available() -> bool:
-    """Return True when at least one Celery worker responds to a ping."""
-    try:
-        inspector = celery_app.control.inspect(timeout=1.0)
-        return bool(inspector and inspector.ping())
-    except Exception:
-        return False
-
-
-def _should_process_inline(document) -> bool:
-    """Process small documents inline so short uploads complete in one request."""
-    try:
-        file_size = getattr(document.file, "size", None)
-        return file_size is None or file_size <= INLINE_PROCESSING_MAX_BYTES
-    except Exception:
-        return True
 
 
 from .models import Document, DocumentChunk, Conversation, Message, EscalationTicket
@@ -66,43 +42,26 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return DocumentSerializer
 
     def create(self, request, *args, **kwargs):
-        """Upload a document (PDF or TXT) — returns instantly, processes in background thread."""
-        file_obj = None
-        if 'file' in request.FILES:
-            file_obj = request.FILES.get('file')
+        """
+        Upload a document (PDF or TXT).
 
-        data = request.data.copy()
-        if file_obj is not None:
-            data['file'] = file_obj
-
-        serializer = self.get_serializer(data=data)
+        Flow:
+          1. Serializer validates + uploads file bytes to Supabase Storage.
+          2. Document row saved with Supabase URL (status = 'processing').
+          3. process_document Celery task queued via Redis.
+          4. HTTP 201 returned immediately — processing happens asynchronously.
+        """
+        serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             document = serializer.save(uploaded_by=request.user, status='processing')
 
-            # ── Always process in a daemon background thread ──────────────
-            # This means the HTTP response returns IMMEDIATELY (no timeout).
-            # The thread handles: text extraction → chunking → Gemini embedding → DB save.
-            # Works on Render free with NO Celery / Redis required.
-            def _bg_process(doc_id):
-                try:
-                    logger.info("[BG] Starting processing for document %s", doc_id)
-                    process_document(doc_id)
-                    logger.info("[BG] Finished processing for document %s", doc_id)
-                except Exception as exc:
-                    logger.exception("[BG] Processing failed for document %s: %s", doc_id, exc)
-
-            thread = threading.Thread(
-                target=_bg_process,
-                args=(document.id,),
-                daemon=True,
-                name=f"doc-process-{document.id}",
-            )
-            thread.start()
-            logger.info("[BG] Spawned processing thread for document %s", document.id)
+            # ── Dispatch to Celery worker via Redis ──────────────────────────
+            process_document.delay(document.id)
+            logger.info("Queued process_document task for document %s", document.id)
 
             return Response(
                 {
-                    'message': 'Document uploaded! Processing started in background — status will update shortly.',
+                    'message': 'Document uploaded to storage. Processing started — status will update shortly.',
                     'document': DocumentSerializer(document).data,
                     'async': True,
                 },
@@ -111,7 +70,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
         # Return clearer error when file missing or wrong encoding
         errors = serializer.errors
-        if not file_obj and ('file' in errors or not str(request.content_type).startswith('multipart')):
+        if 'file' not in request.FILES and not str(request.content_type).startswith('multipart'):
             errors['file'] = errors.get('file', []) + [
                 'No file was uploaded. Use multipart/form-data with a form field named "file".'
             ]
@@ -136,6 +95,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
             'status': document.status,
             'chunk_count': chunk_count,
             'is_ready': document.status == 'ready',
+            'original_filename': document.original_filename,
+            'file_url': document.file_url,
             'created_at': document.created_at,
             'updated_at': document.updated_at,
         })
@@ -197,7 +158,7 @@ class EscalationTicketViewSet(viewsets.ModelViewSet):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-# ─── NEW: Ticket Queue API ───────────────────────────────────────────────────
+# ─── Ticket Queue API ────────────────────────────────────────────────────────
 
 class TicketListView(generics.ListAPIView):
     """
@@ -208,23 +169,19 @@ class TicketListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = TicketListSerializer
 
-    # Map priority labels to numeric sort values (higher = more urgent)
     PRIORITY_ORDER = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1}
 
     def get_queryset(self):
         qs = EscalationTicket.objects.select_related('conversation', 'assigned_to')
 
-        # Filter by status if provided
         status_filter = self.request.query_params.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
 
-        # Filter by priority if provided
         priority_filter = self.request.query_params.get('priority')
         if priority_filter:
             qs = qs.filter(priority=priority_filter)
 
-        # Order by priority descending using a CASE expression
         from django.db.models import Case, When, IntegerField
         priority_ordering = Case(
             When(priority='critical', then=4),
@@ -263,19 +220,16 @@ class AnalyticsView(APIView):
         total_conversations = Conversation.objects.count()
         total_tickets = EscalationTicket.objects.count()
 
-        # Escalation rate = tickets / conversations * 100
         escalation_rate = 0.0
         if total_conversations > 0:
             escalation_rate = round((total_tickets / total_conversations) * 100, 2)
 
-        # Average resolution time (only resolved tickets with resolved_at set)
         resolved_tickets = EscalationTicket.objects.filter(
             status='resolved',
             resolved_at__isnull=False,
         )
         avg_resolution = None
         if resolved_tickets.exists():
-            # Calculate average of (resolved_at - created_at) in seconds, convert to minutes
             from django.db.models import ExpressionWrapper, DurationField
             durations = resolved_tickets.annotate(
                 resolution_duration=ExpressionWrapper(
@@ -287,12 +241,10 @@ class AnalyticsView(APIView):
             if avg_duration:
                 avg_resolution = round(avg_duration.total_seconds() / 60, 2)
 
-        # Open tickets count
         open_tickets = EscalationTicket.objects.filter(
             status__in=['open', 'in_progress']
         ).count()
 
-        # Top 5 unanswered topics — extract from unresolved ticket issues
         unresolved = EscalationTicket.objects.filter(
             status__in=['open', 'in_progress']
         ).order_by('-created_at')[:5]

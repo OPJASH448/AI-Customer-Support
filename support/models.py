@@ -5,17 +5,24 @@ from pgvector.django import VectorField, HnswIndex
 class Document(models.Model):
     """
     Base document model for RAG system.
-    Stores uploaded documents with metadata.
+    Stores document metadata and a Supabase Storage URL.
+    The raw file lives in Supabase; this model only holds the reference URL.
     """
     STATUS_CHOICES = [
         ('processing', 'Processing'),
         ('ready', 'Ready'),
         ('failed', 'Failed'),
     ]
-    
+
     title = models.CharField(max_length=255)
     content = models.TextField(blank=True, null=True)
-    file = models.FileField(upload_to='documents/', blank=True, null=True)
+
+    # Supabase Storage reference — replaces the old local FileField
+    file_url = models.CharField(max_length=500, blank=True, null=True,
+                                help_text="Supabase Storage public/signed URL for the original file")
+    original_filename = models.CharField(max_length=255, blank=True, null=True,
+                                         help_text="Original uploaded filename (e.g. report.pdf)")
+
     source = models.CharField(max_length=255, blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='processing')
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -91,7 +98,7 @@ class Message(models.Model):
     content = models.TextField()
     tokens_used = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     # RAG context
     context_chunks = models.ManyToManyField(DocumentChunk, blank=True, related_name='used_in_messages')
 

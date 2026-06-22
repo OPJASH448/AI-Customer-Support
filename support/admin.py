@@ -4,10 +4,10 @@ from .models import Document, DocumentChunk, Conversation, Message, EscalationTi
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
-    list_display = ('id', 'title', 'status', 'source', 'uploaded_by', 'is_active', 'created_at')
+    list_display = ('id', 'title', 'status', 'source', 'original_filename', 'uploaded_by', 'is_active', 'created_at')
     list_filter = ('status', 'is_active', 'created_at')
-    search_fields = ('title', 'content', 'source')
-    readonly_fields = ('created_at', 'updated_at')
+    search_fields = ('title', 'content', 'source', 'original_filename')
+    readonly_fields = ('file_url', 'original_filename', 'created_at', 'updated_at')
     list_per_page = 25
     date_hierarchy = 'created_at'
 

@@ -32,9 +32,15 @@ DATABASES = {
 DATABASES['default']['CONN_MAX_AGE'] = 60
 DATABASES['default']['OPTIONS'] = {'sslmode': 'require'}
 
-# ── File upload limits ────────────────────────────────────────────────────────
-DATA_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024   # 2 MB
-FILE_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024   # 2 MB
+# ── File upload limits (10 MB — files go to Supabase, not local disk) ────────
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
+
+# ── Supabase Storage ──────────────────────────────────────────────────────────
+import os as _os
+SUPABASE_URL = _os.environ.get('SUPABASE_URL', '')
+SUPABASE_KEY = _os.environ.get('SUPABASE_KEY', '')
+SUPABASE_BUCKET = _os.environ.get('SUPABASE_BUCKET', 'ai-customer-support-pdfs')
 
 # ── Static files ──────────────────────────────────────────────────────────────
 STATIC_URL = '/static/'

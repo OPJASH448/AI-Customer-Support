@@ -40,6 +40,12 @@ services:
         value: ".onrender.com"
       - key: WEB_CONCURRENCY
         value: "2"
+      - key: SUPABASE_URL
+        sync: false           # set manually in Render dashboard
+      - key: SUPABASE_KEY
+        sync: false           # set manually in Render dashboard
+      - key: SUPABASE_BUCKET
+        value: "ai-customer-support-pdfs"
 
   # ── Celery Worker ────────────────────────────────────────────────────────────
   - type: worker
@@ -75,6 +81,12 @@ services:
           property: connectionString
       - key: GEMINI_API_KEY
         sync: false           # set manually in Render dashboard
+      - key: SUPABASE_URL
+        sync: false           # set manually in Render dashboard
+      - key: SUPABASE_KEY
+        sync: false           # set manually in Render dashboard
+      - key: SUPABASE_BUCKET
+        value: "ai-customer-support-pdfs"
 
 # ── PostgreSQL Database ──────────────────────────────────────────────────────
 databases:

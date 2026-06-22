@@ -2,7 +2,9 @@ from celery import shared_task
 from django.core.mail import send_mail
 from django.conf import settings
 import os
+import io
 import logging
+import requests as http_requests
 
 from google import genai
 from google.genai import types as genai_types
@@ -68,13 +70,14 @@ def test_celery_task():
 )
 def process_document(self, document_id):
     """
-    Main document processing task (optimized for speed):
-      1. Extract text from PDF/TXT
-      2. Split into ~1000-token chunks with 20-token overlap (larger = fewer chunks)
-      3. Generate embeddings via batched Gemini API calls
+    Main document processing task (Supabase Storage edition):
+      1. Download file bytes from Supabase Storage URL (no local disk needed)
+      2. Extract text from PDF/TXT bytes in memory
+      3. Split into ~1000-token chunks with 20-token overlap
+      4. Generate embeddings via batched Gemini API calls
          (one API request per batch of EMBED_BATCH_SIZE chunks)
-      4. Bulk-insert DocumentChunk rows with embeddings
-      5. Mark Document status as 'ready' or 'failed'
+      5. Bulk-insert DocumentChunk rows with embeddings
+      6. Mark Document status as 'ready' or 'failed'
 
     Performance benchmarks
     ----------------------
@@ -91,21 +94,30 @@ def process_document(self, document_id):
         document.status = "processing"
         document.save(update_fields=["status", "updated_at"])
 
-        # ── 1. Validate file ────────────────────────────────────────────────
-        if not document.file:
-            raise ValueError("Document has no associated file.")
+        # ── 1. Validate Supabase URL ─────────────────────────────────────────
+        if not document.file_url:
+            raise ValueError("Document has no associated file URL. Upload may have failed.")
 
-        file_path = document.file.path
-        file_ext = os.path.splitext(file_path)[1].lower()
+        file_url = document.file_url
+        original_filename = document.original_filename or ""
+        file_ext = os.path.splitext(original_filename)[1].lower()
 
-        # ── 2. Extract text ─────────────────────────────────────────────────
-        if file_ext == ".pdf":
-            text = _extract_text_from_pdf(file_path)
-        elif file_ext == ".txt":
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                text = f.read()
-        else:
+        if not file_ext:
+            # Fallback: try to detect from URL
+            file_ext = os.path.splitext(file_url.split("?")[0])[1].lower()
+
+        if file_ext not in (".pdf", ".txt"):
             raise ValueError(f"Unsupported file type: {file_ext!r}")
+
+        # ── 2. Download file bytes from Supabase ─────────────────────────────
+        logger.info("process_document[%s]: downloading from %s", document_id, file_url)
+        file_bytes = _download_from_supabase(file_url)
+
+        # ── 3. Extract text in memory ────────────────────────────────────────
+        if file_ext == ".pdf":
+            text = _extract_text_from_pdf_bytes(file_bytes)
+        else:  # .txt
+            text = file_bytes.decode("utf-8", errors="replace")
 
         if not text or not text.strip():
             raise ValueError("Extracted text is empty — PDF may be scanned/image-based.")
@@ -114,7 +126,7 @@ def process_document(self, document_id):
         document.content = text
         document.save(update_fields=["content", "updated_at"])
 
-        # ── 3. Chunk text ───────────────────────────────────────────────────
+        # ── 4. Chunk text ────────────────────────────────────────────────────
         chunks = _split_into_chunks(text, chunk_size=1000, overlap=20)
         if not chunks:
             raise ValueError("No text chunks produced from document.")
@@ -127,7 +139,7 @@ def process_document(self, document_id):
         # Replace any pre-existing chunks (re-processing scenario)
         document.chunks.all().delete()
 
-        # ── 4. Batch-embed + build chunk objects ────────────────────────────
+        # ── 5. Batch-embed + build chunk objects ─────────────────────────────
         chunk_objects = []
         encoding = _get_encoding()
 
@@ -161,7 +173,7 @@ def process_document(self, document_id):
                     )
                 )
 
-        # ── 5. Persist to DB ────────────────────────────────────────────────
+        # ── 6. Persist to DB ─────────────────────────────────────────────────
         DocumentChunk.objects.bulk_create(chunk_objects)
 
         document.status = "ready"
@@ -208,16 +220,38 @@ def process_document(self, document_id):
 # Helper functions
 # ---------------------------------------------------------------------------
 
-def _extract_text_from_pdf(file_path: str) -> str:
-    """Extract text from PDF using pypdf (fast, actively maintained)."""
+def _download_from_supabase(url: str) -> bytes:
+    """
+    Download file bytes from a Supabase Storage URL.
+    Uses the service key for authenticated access if the bucket is private.
+    Raises ValueError on HTTP errors or timeouts.
+    """
+    supabase_key = getattr(settings, 'SUPABASE_KEY', '')
+    headers = {}
+    if supabase_key:
+        headers['Authorization'] = f'Bearer {supabase_key}'
+
+    try:
+        response = http_requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.content
+    except http_requests.exceptions.Timeout:
+        raise ValueError(f"Timeout downloading file from Supabase: {url}")
+    except http_requests.exceptions.HTTPError as exc:
+        raise ValueError(f"HTTP error downloading file from Supabase ({exc.response.status_code}): {url}")
+    except Exception as exc:
+        raise ValueError(f"Failed to download file from Supabase: {exc}")
+
+
+def _extract_text_from_pdf_bytes(file_bytes: bytes) -> str:
+    """Extract text from PDF bytes using pypdf (in-memory, no disk access)."""
     pages = []
     try:
-        with open(file_path, "rb") as fh:
-            reader = PdfReader(fh)
-            for page in reader.pages:
-                page_text = page.extract_text() or ""
-                if page_text.strip():
-                    pages.append(page_text)
+        reader = PdfReader(io.BytesIO(file_bytes))
+        for page in reader.pages:
+            page_text = page.extract_text() or ""
+            if page_text.strip():
+                pages.append(page_text)
         return "\n".join(pages)
     except Exception as exc:
         raise ValueError(f"Error extracting PDF text: {exc}") from exc
@@ -287,7 +321,7 @@ def _get_embeddings_batch(texts: list, timeout: int = EMBED_TIMEOUT) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Legacy public wrapper kept for backward-compat with any direct callers
+# Legacy public wrappers kept for backward-compat with any direct callers
 # ---------------------------------------------------------------------------
 
 def get_embeddings_batch(texts: list) -> list:

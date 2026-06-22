@@ -118,9 +118,10 @@ static_dir = os.path.join(BASE_DIR, 'static')
 STATICFILES_DIRS = [static_dir] if os.path.isdir(static_dir) else []
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
-# Media files
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+# Supabase Storage (replaces local media/ — files are stored in Supabase bucket)
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
+SUPABASE_BUCKET = os.environ.get('SUPABASE_BUCKET', 'ai-customer-support-pdfs')
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -172,9 +173,9 @@ GEMINI_API_KEY = env('GEMINI_API_KEY', default='')
 # Vector Search (pgvector)
 PGVECTOR_DIMENSION = 768  # Google Gemini embedding dimension
 
-# File upload limits (2 MB default — production.py overrides if needed)
-DATA_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024   # 2 MB
-FILE_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024   # 2 MB
+# File upload limits — 10 MB (files are streamed to Supabase, not stored locally)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
 
 # DRF throttling — protect the chat endpoint from abuse
 # Keeps request rate below Gemini free tier (~15 req/min) since each chat
