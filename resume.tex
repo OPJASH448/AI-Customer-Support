@@ -132,9 +132,11 @@
     \resumeProjectHeading
       {\textbf{AI Customer Support Agent} $|$ \emph{\href{https://github.com/OPJASH448/AI-Customer-Support}{Repository Link}}}{}
       \resumeItemListStart
-        \resumeItem{Independently architected a production-deployed RAG system -- document ingestion $\rightarrow$ 500-token chunking (50-token overlap) $\rightarrow$ Gemini 2.5 Flash embeddings $\rightarrow$ pgvector cosine similarity retrieval -- serving end-to-end customer support queries with cited sources.}
-        \resumeItem{Engineered a priority-based escalation queue using Celery + Redis that auto-routes unanswered queries to human agents, ensuring zero dropped requests under high-volume concurrent load.}
-        \resumeItem{\textit{Tech:} Django, DRF, Gemini 2.5 Flash, pgvector, Celery, Redis, HTMX, RAG, Vector Search, Prompt Engineering}
+        \resumeItem{Architected and deployed a cloud-native Hybrid RAG (Dense pgvector + Sparse BM25) search engine on Render, leveraging Reciprocal Rank Fusion (RRF) to merge semantic and keyword context with zero query leakage.}
+        \resumeItem{Engineered an asynchronous task pipeline via Celery and Upstash Redis (secured with TLS), offloading compute-intensive PDF parsing, tiktoken chunking, and Gemini embedding generation from the main request thread.}
+        \resumeItem{De-coupled file storage and metadata by integrating Supabase Storage (object store) and routing database queries through the Supabase Session Connection Pooler on port 5432 to enable multi-tenant IPv4/IPv6 compatibility.}
+        \resumeItem{Hardened data security by enforcing PostgreSQL Row-Level Security (RLS) on internal Django schemas and configuring custom DRF throttling rules to prevent Gemini LLM API abuse.}
+        \resumeItem{\textit{Tech:} Django, DRF, Google Gemini API, pgvector (HNSW Index), BM25, Celery, Upstash Redis, Supabase, Render IaC, Docker}
       \resumeItemListEnd
 
     \resumeProjectHeading
@@ -184,8 +186,8 @@
  \begin{itemize}[leftmargin=0.15in, label={}]
     \small{\item{
      \textbf{Languages}{: C++ (Proficient), Python (Proficient)} \\
-     \textbf{Frameworks \& Tools}{: Django, FastAPI, Docker, PostgreSQL, Redis, MySQL, Celery} \\
-     \textbf{AI / LLM}{: RAG pipelines, Gemini 2.5 Flash, pgvector, vector search, prompt engineering} \\
+     \textbf{Frameworks \& Tools}{: Django, FastAPI, Docker, PostgreSQL, Redis, MySQL, Celery, Supabase, Render} \\
+     \textbf{AI / LLM}{: RAG pipelines, Gemini 2.5 Flash, pgvector, Vector Search, BM25, RRF, Prompt Engineering} \\
      \textbf{Concepts}{: Distributed Systems, REST APIs, Rate Limiting, Caching, Microservices, Vector Search}
     }}
  \end{itemize}
