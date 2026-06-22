@@ -127,15 +127,16 @@ AI Customer Support Agent is an intelligent customer support system that uses **
 | **Vector DB** | pgvector | 0.4.2 | PostgreSQL vector similarity search + HNSW index |
 | **Sparse Retrieval** | rank-bm25 | 0.2.2+ | BM25 keyword retrieval (pure Python, Render-safe) |
 | **RAG Fusion** | Custom RRF | — | Reciprocal Rank Fusion (k=60) merges dense + sparse |
-| **Database** | PostgreSQL | 16 | Primary data store |
-| **Cache/Broker** | Redis | 7 | Celery task broker |
+| **Database** | Supabase PostgreSQL | 16 | External managed primary data store (IPv4 Connection Pooler) |
+| **Cache/Broker** | Upstash Redis | Serverless | External secure TLS-enabled Celery task broker (rediss://) |
+| **Storage** | Supabase Storage | — | Persistent cloud object storage for uploaded knowledge base documents |
 | **Async Tasks** | Celery | 5.3 | Background job processing |
 | **WSGI** | Gunicorn | 20.1 | Production server |
 | **Static Files** | WhiteNoise | 6.4 | Compressed static file serving |
-| **PDF Parsing** | PyPDF2 | 3.0+ | Document text extraction |
-| **Tokenization** | tiktoken | 0.5+ | Token counting & chunking |
+| **PDF Parsing** | pypdf | 4.0+ | Modern memory-efficient PDF text extraction |
+| **Tokenization** | tiktoken | 0.7+ | Token counting & chunking |
 | **Config** | django-environ | — | Environment variable management |
-| **Deployment** | Render | — | Cloud PaaS hosting |
+| **Deployment** | Render | — | Cloud PaaS hosting for Web and Worker services |
 | **Containers** | Docker Compose | 3.9 | Local development |
 
 ---
@@ -556,10 +557,8 @@ python manage.py createsuperuser
 
 | Service | Type | Description |
 |---------|------|-------------|
-| `support-agent-web` | Web Service | Django + Gunicorn |
-| `support-agent-worker` | Worker | Celery background tasks |
-| `support-db` | PostgreSQL | Managed database |
-| `support-redis` | Redis | Managed cache/broker |
+| `support-agent-web` | Web Service | Django + Gunicorn (connects to Supabase DB/Storage and Upstash Redis) |
+| `support-agent-worker` | Worker | Celery background tasks (connects to Supabase DB/Storage and Upstash Redis) |
 
 ### Docker (Local Development)
 

@@ -26,14 +26,9 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: DATABASE_URL
-        fromDatabase:
-          name: support-db
-          property: connectionString
+        sync: false           # set manually to Supabase database connection string in Render dashboard
       - key: REDIS_URL
-        fromService:
-          name: support-redis
-          type: redis
-          property: connectionString
+        sync: false           # set manually to Upstash Redis secure (rediss://) URL in Render dashboard
       - key: GEMINI_API_KEY
         sync: false           # set manually in Render dashboard
       - key: ALLOWED_HOSTS
@@ -71,14 +66,9 @@ services:
           name: support-agent-web
           envVarKey: SECRET_KEY
       - key: DATABASE_URL
-        fromDatabase:
-          name: support-db
-          property: connectionString
+        sync: false           # set manually to Supabase database connection string in Render dashboard
       - key: REDIS_URL
-        fromService:
-          name: support-redis
-          type: redis
-          property: connectionString
+        sync: false           # set manually to Upstash Redis secure (rediss://) URL in Render dashboard
       - key: GEMINI_API_KEY
         sync: false           # set manually in Render dashboard
       - key: SUPABASE_URL
@@ -88,17 +78,4 @@ services:
       - key: SUPABASE_BUCKET
         value: "ai-customer-support-pdfs"
 
-# ── PostgreSQL Database ──────────────────────────────────────────────────────
-databases:
-  - name: support-db
-    databaseName: customer_support
-    user: postgres
-    plan: free
-    region: singapore
 
-# ── Redis ────────────────────────────────────────────────────────────────────
-redis:
-  - name: support-redis
-    plan: free
-    region: singapore
-    ipAllowList: []

@@ -5,7 +5,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('support', '0002_document_file_document_status_alter_document_content'),
+        ('support', '0005_documentchunk_docchunk_embed_hnsw_idx'),
     ]
 
     operations = [

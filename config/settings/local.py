@@ -5,17 +5,24 @@ DEBUG = True
 ALLOWED_HOSTS = ['*']
 
 # Database - PostgreSQL with Docker (same as production, but local)
-DATABASES = {
-    'default': {
-        'ENGINE': env('DB_ENGINE', default='django.db.backends.postgresql'),
-        'NAME': env('DB_NAME', default='ai_support'),
-        'USER': env('DB_USER', default='postgres'),
-        'PASSWORD': env('DB_PASSWORD', default='password'),
-        'HOST': env('DB_HOST', default='localhost'),
-        'PORT': env('DB_PORT', default='5433'),
-        'CONN_MAX_AGE': 60,   # keep DB connections alive for 60 s
+if env('DATABASE_URL', default=''):
+    DATABASES = {
+        'default': env.db('DATABASE_URL')
     }
-}
+    DATABASES['default']['CONN_MAX_AGE'] = 60
+    DATABASES['default']['OPTIONS'] = {'sslmode': 'require'}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': env('DB_ENGINE', default='django.db.backends.postgresql'),
+            'NAME': env('DB_NAME', default='ai_support'),
+            'USER': env('DB_USER', default='postgres'),
+            'PASSWORD': env('DB_PASSWORD', default='password'),
+            'HOST': env('DB_HOST', default='localhost'),
+            'PORT': env('DB_PORT', default='5433'),
+            'CONN_MAX_AGE': 60,   # keep DB connections alive for 60 s
+        }
+    }
 
 # Logging
 LOGGING = {
@@ -35,6 +42,15 @@ LOGGING = {
 # Celery in local development
 CELERY_BROKER_URL = env('REDIS_URL', default='redis://localhost:6380/0')
 CELERY_RESULT_BACKEND = env('REDIS_URL', default='redis://localhost:6380/0')
+
+if CELERY_BROKER_URL.startswith('rediss://'):
+    import ssl
+    CELERY_BROKER_USE_SSL = {
+        'ssl_cert_reqs': ssl.CERT_NONE
+    }
+    CELERY_REDIS_BACKEND_USE_SSL = {
+        'ssl_cert_reqs': ssl.CERT_NONE
+    }
 
 # When Redis is not running locally, run tasks synchronously in the same
 # process.  This means upload will block until processing finishes, but
