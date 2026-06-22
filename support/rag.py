@@ -41,9 +41,12 @@ logger = logging.getLogger(__name__)
 # ── Retry / backoff helper ─────────────────────────────────────────────────────
 
 def _is_rate_limit_error(exc: Exception) -> bool:
-    """Return True when the exception looks like a Gemini 429 / quota error."""
+    """Return True when the exception looks like a Gemini 429, 503, 500, or overloaded transient error."""
     msg = str(exc).lower()
-    return any(kw in msg for kw in ('429', 'quota', 'rate limit', 'resource_exhausted', 'rateLimitExceeded'.lower()))
+    return any(kw in msg for kw in (
+        '429', '503', '500', 'quota', 'rate limit', 'resource_exhausted', 
+        'rateLimitExceeded'.lower(), 'service unavailable', 'overloaded', 'unavailable'
+    ))
 
 
 def _call_with_backoff(fn, *args, max_retries: int = 3, base_delay: float = 5.0, **kwargs):
