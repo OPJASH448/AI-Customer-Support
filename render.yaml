@@ -1,30 +1,21 @@
 services:
 
-  # ── Web Service (Django + Gunicorn) ─────────────────────────────────────────
-  # NOTE: Render free plan does NOT support background worker services.
-  # Document processing is handled by a daemon thread inside this web process
-  # via the built-in Celery thread fallback in support/views.py.
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Web Service — Django + Gunicorn
+  # ─────────────────────────────────────────────────────────────────────────────
   - type: web
     name: support-agent-web
     env: python
     plan: free
     region: singapore
 
-    buildCommand: >
-      pip install -r requirements.txt &&
-      python manage.py collectstatic --noinput --settings=config.settings.production &&
+    buildCommand: |
+      pip install -r requirements.txt
+      python manage.py collectstatic --noinput --settings=config.settings.production
       python manage.py migrate --settings=config.settings.production
 
-    # 1 worker + 4 threads: background document-processing threads share
-    # the same process without consuming too much RAM on the free tier.
-    # timeout 300 gives PDF processing enough time before gunicorn kills the worker.
-    startCommand: >
-      gunicorn config.wsgi:application
-      --workers 1
-      --threads 4
-      --timeout 300
-      --bind 0.0.0.0:$PORT
-      --log-level info
+    startCommand: |
+      gunicorn config.wsgi:application --workers 1 --threads 4 --timeout 300 --bind 0.0.0.0:$PORT --log-level info
 
     envVars:
       - key: DJANGO_SETTINGS_MODULE
@@ -41,8 +32,50 @@ services:
         value: "1"
       - key: SUPABASE_BUCKET
         value: "ai-customer-support-pdfs"
+      # ── Set these manually in the Render dashboard after Blueprint deploy ──
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
 
-      # ── Set these manually in the Render dashboard ──
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Background Worker — Celery
+  # ─────────────────────────────────────────────────────────────────────────────
+  - type: worker
+    name: support-agent-worker
+    env: python
+    plan: free
+    region: singapore
+
+    buildCommand: |
+      pip install -r requirements.txt
+
+    startCommand: |
+      celery -A config worker --loglevel=info --concurrency=1 --pool=solo
+
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: RENDER
+        value: "true"
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      # Share the same SECRET_KEY as the web service
+      - key: SECRET_KEY
+        fromService:
+          name: support-agent-web
+          type: web
+          envVarKey: SECRET_KEY
+      - key: SUPABASE_BUCKET
+        value: "ai-customer-support-pdfs"
+      # ── Set these manually in the Render dashboard after Blueprint deploy ──
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL
