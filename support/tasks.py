@@ -43,7 +43,7 @@ _client = genai.Client(
 )
 
 EMBED_MODEL = "gemini-embedding-001"
-EMBED_BATCH_SIZE = 100  # Gemini official limit; use full capacity for fewer API round-trips
+EMBED_BATCH_SIZE = 20   # Safer limit to prevent rate limits / token limit exceptions
 EMBED_TIMEOUT = 30      # seconds; prevent hanging on slow network
 
 
@@ -127,9 +127,12 @@ def process_document(self, document_id):
         document.save(update_fields=["content", "updated_at"])
 
         # ── 4. Chunk text ────────────────────────────────────────────────────
-        chunks = _split_into_chunks(text, chunk_size=1000, overlap=20)
-        if not chunks:
+        chunks_with_tokens = _split_into_chunks(text, chunk_size=1000, overlap=20)
+        if not chunks_with_tokens:
             raise ValueError("No text chunks produced from document.")
+
+        chunks = [c[0] for c in chunks_with_tokens]
+        chunk_tokens = [c[1] for c in chunks_with_tokens]
 
         logger.info(
             "process_document[%s]: %d chunks to embed (batches of %d).",
@@ -141,10 +144,6 @@ def process_document(self, document_id):
 
         # ── 5. Batch-embed + build chunk objects ─────────────────────────────
         chunk_objects = []
-        encoding = _get_encoding()
-
-        # Pre-compute token counts once (avoid re-encoding per chunk)
-        chunk_tokens = [len(encoding.encode(chunk)) for chunk in chunks]
 
         for batch_start in range(0, len(chunks), EMBED_BATCH_SIZE):
             batch_end = min(batch_start + EMBED_BATCH_SIZE, len(chunks))
@@ -269,13 +268,13 @@ def _split_into_chunks(text: str, chunk_size: int = 500, overlap: int = 50):
 
     chunks = []
     start = 0
-    step = chunk_size - overlap  # advance by this many tokens each iteration
+    step = max(1, chunk_size - overlap)  # advance by this many tokens each iteration
 
     while start < len(tokens):
         end = min(start + chunk_size, len(tokens))
         chunk_text = encoding.decode(tokens[start:end])
         if chunk_text.strip():
-            chunks.append(chunk_text)
+            chunks.append((chunk_text, end - start))
         if end == len(tokens):
             break
         start += step

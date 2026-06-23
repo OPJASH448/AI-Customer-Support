@@ -208,7 +208,7 @@ def hybrid_retrieve(
         queryset = queryset.filter(document__uploaded_by=user)
 
     # ── Fetch corpus for BM25 ─────────────────────────────────────────────────
-    corpus_limit = max(SPARSE_TOP_K, top_k * 4)
+    corpus_limit = 10000
     all_chunks = list(queryset[:corpus_limit])
 
     if not all_chunks:

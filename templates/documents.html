@@ -245,7 +245,13 @@
 
     try {
       const resp = await fetch('/api/support/documents/', { headers: { 'X-CSRFToken': csrfToken } });
-      if (!resp.ok) throw new Error('API error');
+      if (!resp.ok) {
+        if (resp.status === 401 || resp.status === 403) {
+          throw new Error('Unauthorized');
+        } else {
+          throw new Error(`HTTP error ${resp.status}`);
+        }
+      }
       const data = await resp.json();
       const docs  = data.results || data;
 
@@ -292,7 +298,12 @@
           </div>`;
       }).join('');
     } catch(e) {
-      container.innerHTML = `<div class="px-6 py-8 text-center text-red-400 text-sm">Failed to load documents. Are you logged in?</div>`;
+      console.error("loadDocuments failed:", e);
+      if (e.message === 'Unauthorized') {
+        container.innerHTML = `<div class="px-6 py-8 text-center text-red-400 text-sm">Failed to load documents. Are you logged in?</div>`;
+      } else {
+        container.innerHTML = `<div class="px-6 py-8 text-center text-red-400 text-sm">Failed to load documents: ${e.message}. Please check logs.</div>`;
+      }
     }
   }
 
