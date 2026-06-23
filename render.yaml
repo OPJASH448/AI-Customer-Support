@@ -1,19 +1,22 @@
 services:
 
   # ── Web Service (Django + Gunicorn) ─────────────────────────────────────────
+  # NOTE: Render free plan does NOT support background worker services.
+  # Document processing is handled by a daemon thread inside this web process
+  # via the built-in Celery thread fallback in support/views.py.
   - type: web
     name: support-agent-web
     env: python
     plan: free
-    region: singapore          # closest to India
+    region: singapore
 
     buildCommand: >
       pip install -r requirements.txt &&
       python manage.py collectstatic --noinput --settings=config.settings.production &&
       python manage.py migrate --settings=config.settings.production
 
-    # 1 worker + 4 threads: lets background document-processing threads share
-    # the same process memory without consuming too much RAM on the free tier.
+    # 1 worker + 4 threads: background document-processing threads share
+    # the same process without consuming too much RAM on the free tier.
     # timeout 300 gives PDF processing enough time before gunicorn kills the worker.
     startCommand: >
       gunicorn config.wsgi:application
@@ -36,6 +39,8 @@ services:
         value: ".onrender.com"
       - key: WEB_CONCURRENCY
         value: "1"
+      - key: SUPABASE_BUCKET
+        value: "ai-customer-support-pdfs"
 
       # ── Set these manually in the Render dashboard ──
       - key: DATABASE_URL
@@ -48,57 +53,3 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
-      - key: SUPABASE_BUCKET
-        value: "ai-customer-support-pdfs"
-
-
-  # ── Celery Worker ────────────────────────────────────────────────────────────
-  # NOTE: On Render's free plan this worker WILL spin down after 15 min of
-  # inactivity. The web service has a built-in thread fallback that handles
-  # document processing when this worker is asleep — so documents will always
-  # be processed, just slightly slower during a cold start.
-  - type: worker
-    name: support-agent-worker
-    env: python
-    plan: free
-    region: singapore
-
-    buildCommand: pip install -r requirements.txt
-
-    # --pool=solo  — avoids fork() issues on Linux containers
-    # --concurrency=1 — one task at a time; safe for free tier RAM
-    # --loglevel=info — shows task start/success/failure in Render logs
-    startCommand: >
-      celery -A config worker
-      --loglevel=info
-      --concurrency=1
-      --pool=solo
-
-    envVars:
-      - key: DJANGO_SETTINGS_MODULE
-        value: config.settings.production
-      - key: RENDER
-        value: "true"
-      - key: PYTHON_VERSION
-        value: "3.12.0"
-
-      # Share the same SECRET_KEY as the web service
-      - key: SECRET_KEY
-        fromService:
-          name: support-agent-web
-          type: web
-          envVarKey: SECRET_KEY
-
-      # ── Set these manually in the Render dashboard (same values as web) ──
-      - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-      - key: SUPABASE_BUCKET
-        value: "ai-customer-support-pdfs"
