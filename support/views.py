@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from django.db.models import Avg, Count, Q, F
 from django.utils import timezone
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -49,22 +50,55 @@ class DocumentViewSet(viewsets.ModelViewSet):
         Flow:
           1. Serializer validates + uploads file bytes to Supabase Storage.
           2. Document row saved with Supabase URL (status = 'processing').
-          3. process_document Celery task queued via Redis.
-          4. HTTP 201 returned immediately — processing happens asynchronously.
+          3. Tries to dispatch to Celery worker via Redis.
+          4. If Celery is unavailable (no worker), falls back to processing
+             in a background thread inside the web process.
+          5. HTTP 201 returned immediately in both cases.
         """
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             document = serializer.save(uploaded_by=request.user, status='processing')
 
-            # ── Dispatch to Celery worker via Redis ──────────────────────────
-            process_document.delay(document.id)
-            logger.info("Queued process_document task for document %s", document.id)
+            dispatched = False
+            try:
+                # Try to dispatch to Celery worker via Redis
+                result = process_document.apply_async((document.id,), expires=600)
+                logger.info(
+                    "Queued process_document task for document %s (task_id=%s)",
+                    document.id, result.id,
+                )
+                dispatched = True
+            except Exception as celery_exc:
+                logger.warning(
+                    "Celery unavailable for document %s (%s) — "
+                    "falling back to in-process thread.",
+                    document.id, celery_exc,
+                )
+
+            if not dispatched:
+                # Fallback: run synchronously in a daemon thread so the HTTP
+                # response is returned immediately while processing continues.
+                def _run():
+                    try:
+                        process_document(document.id)
+                    except Exception as exc:
+                        logger.error(
+                            "Thread fallback failed for document %s: %s",
+                            document.id, exc,
+                        )
+
+                t = threading.Thread(target=_run, daemon=True)
+                t.start()
+                logger.info(
+                    "Started fallback thread for document %s", document.id
+                )
 
             return Response(
                 {
-                    'message': 'Document uploaded to storage. Processing started — status will update shortly.',
+                    'message': 'Document uploaded. Processing started — status will update shortly.',
                     'document': DocumentSerializer(document).data,
                     'async': True,
+                    'celery_queued': dispatched,
                 },
                 status=status.HTTP_201_CREATED,
             )

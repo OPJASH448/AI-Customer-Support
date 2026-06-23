@@ -11,9 +11,9 @@ services:
       python manage.py migrate --settings=config.settings.production
     startCommand: >
       gunicorn config.wsgi:application
-      --workers 2
-      --threads 2
-      --timeout 120
+      --workers 1
+      --threads 4
+      --timeout 300
       --bind 0.0.0.0:$PORT
       --log-level info
     envVars:
