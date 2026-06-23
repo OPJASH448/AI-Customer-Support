@@ -1,8 +1,8 @@
 services:
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Web Service — Django + Gunicorn
-  # ─────────────────────────────────────────────────────────────────────────────
+  # ── Web Service (Django + Gunicorn) ─────────────────────────────────────────
+  # No Celery worker needed — document processing runs inside a daemon thread
+  # within this web process via the built-in fallback in support/views.py.
   - type: web
     name: support-agent-web
     env: python
@@ -32,50 +32,6 @@ services:
         value: "1"
       - key: SUPABASE_BUCKET
         value: "ai-customer-support-pdfs"
-      # ── Set these manually in the Render dashboard after Blueprint deploy ──
-      - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
-
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Background Worker — Celery
-  # ─────────────────────────────────────────────────────────────────────────────
-  - type: worker
-    name: support-agent-worker
-    env: python
-    plan: free
-    region: singapore
-
-    buildCommand: |
-      pip install -r requirements.txt
-
-    startCommand: |
-      celery -A config worker --loglevel=info --concurrency=1 --pool=solo
-
-    envVars:
-      - key: DJANGO_SETTINGS_MODULE
-        value: config.settings.production
-      - key: RENDER
-        value: "true"
-      - key: PYTHON_VERSION
-        value: "3.12.0"
-      # Share the same SECRET_KEY as the web service
-      - key: SECRET_KEY
-        fromService:
-          name: support-agent-web
-          type: web
-          envVarKey: SECRET_KEY
-      - key: SUPABASE_BUCKET
-        value: "ai-customer-support-pdfs"
-      # ── Set these manually in the Render dashboard after Blueprint deploy ──
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL
