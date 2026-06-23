@@ -30,6 +30,7 @@ from .rag import hybrid_retrieve, generate_grounded_answer
 class DocumentViewSet(viewsets.ModelViewSet):
     """Document management endpoints"""
     permission_classes = [IsAuthenticated]
+    throttle_classes = []
     serializer_class = DocumentSerializer
     parser_classes = (MultiPartParser, FormParser)
 
@@ -167,6 +168,7 @@ class TicketListView(generics.ListAPIView):
     Supports ?status=open filter.
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = []
     serializer_class = TicketListSerializer
 
     PRIORITY_ORDER = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1}
@@ -199,6 +201,7 @@ class TicketResolveView(generics.UpdateAPIView):
     Resolve a ticket: sets status='resolved', saves agent_reply, records resolved_at.
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = []
     serializer_class = TicketResolveSerializer
     queryset = EscalationTicket.objects.all()
     http_method_names = ['patch']
@@ -215,6 +218,7 @@ class AnalyticsView(APIView):
       - top_unanswered (top 5 unresolved ticket topics)
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = []
 
     def get(self, request):
         total_conversations = Conversation.objects.count()

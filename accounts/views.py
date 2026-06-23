@@ -36,6 +36,7 @@ class RegisterView(viewsets.ViewSet):
 class UserProfileViewSet(viewsets.ModelViewSet):
     """User profile endpoints"""
     permission_classes = [IsAuthenticated]
+    throttle_classes = []
     serializer_class = UserProfileSerializer
 
     def get_queryset(self):
