@@ -47,58 +47,84 @@ class DocumentViewSet(viewsets.ModelViewSet):
         """
         Upload a document (PDF or TXT).
 
-        Flow:
-          1. Serializer validates + uploads file bytes to Supabase Storage.
-          2. Document row saved with Supabase URL (status = 'processing').
-          3. Tries to dispatch to Celery worker via Redis.
-          4. If Celery is unavailable (no worker), falls back to processing
-             in a background thread inside the web process.
-          5. HTTP 201 returned immediately in both cases.
+        Processing flow:
+          1. Validate file + upload bytes to Supabase Storage.
+          2. Save Document row with status='processing'.
+          3. Try to dispatch process_document to Celery via Redis.
+             - If Celery worker is running  → task processed asynchronously ✅
+             - If Celery worker is offline   → fallback to a daemon thread ✅
+          4. Return HTTP 201 immediately in both cases.
         """
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             document = serializer.save(uploaded_by=request.user, status='processing')
+            doc_id = document.id
 
-            dispatched = False
+            celery_queued = False
+
+            # ── Try Celery first ──────────────────────────────────────────────
             try:
-                # Try to dispatch to Celery worker via Redis
-                result = process_document.apply_async((document.id,), expires=600)
-                logger.info(
-                    "Queued process_document task for document %s (task_id=%s)",
-                    document.id, result.id,
+                result = process_document.apply_async(
+                    args=(doc_id,),
+                    expires=600,  # discard task if not consumed within 10 min
                 )
-                dispatched = True
-            except Exception as celery_exc:
+                logger.info(
+                    "process_document[%s] queued via Celery (task_id=%s)",
+                    doc_id, result.id,
+                )
+                celery_queued = True
+            except Exception as exc:
                 logger.warning(
-                    "Celery unavailable for document %s (%s) — "
-                    "falling back to in-process thread.",
-                    document.id, celery_exc,
+                    "Celery broker unavailable for document %s (%s). "
+                    "Falling back to background thread.",
+                    doc_id, exc,
                 )
 
-            if not dispatched:
-                # Fallback: run synchronously in a daemon thread so the HTTP
-                # response is returned immediately while processing continues.
-                def _run():
+            # ── Fallback: background thread inside the web process ────────────
+            if not celery_queued:
+                def _process_in_thread(document_id):
+                    """
+                    Run document processing synchronously inside a daemon thread.
+                    Closes DB connections when done so they are not leaked.
+                    """
+                    from django.db import connection
                     try:
-                        process_document(document.id)
+                        logger.info(
+                            "process_document[%s] starting via thread fallback.",
+                            document_id,
+                        )
+                        process_document(document_id)
+                        logger.info(
+                            "process_document[%s] completed via thread fallback.",
+                            document_id,
+                        )
                     except Exception as exc:
                         logger.error(
-                            "Thread fallback failed for document %s: %s",
-                            document.id, exc,
+                            "process_document[%s] thread fallback failed: %s",
+                            document_id, exc,
                         )
+                    finally:
+                        # Always close the DB connection opened by this thread
+                        connection.close()
 
-                t = threading.Thread(target=_run, daemon=True)
-                t.start()
+                thread = threading.Thread(
+                    target=_process_in_thread,
+                    args=(doc_id,),
+                    daemon=True,
+                    name=f"doc-process-{doc_id}",
+                )
+                thread.start()
                 logger.info(
-                    "Started fallback thread for document %s", document.id
+                    "process_document[%s] thread fallback started (thread=%s).",
+                    doc_id, thread.name,
                 )
 
             return Response(
                 {
-                    'message': 'Document uploaded. Processing started — status will update shortly.',
+                    'message': 'Document uploaded. Processing started — refresh in a few seconds.',
                     'document': DocumentSerializer(document).data,
                     'async': True,
-                    'celery_queued': dispatched,
+                    'celery_queued': celery_queued,
                 },
                 status=status.HTTP_201_CREATED,
             )
@@ -112,6 +138,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return Response(errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['get'])
+
     def chunks(self, request, pk=None):
         """Get all chunks for a document"""
         document = self.get_object()

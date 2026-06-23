@@ -50,20 +50,33 @@ STATICFILES_DIRS = [static_dir] if os.path.isdir(static_dir) else []
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # ── Celery ────────────────────────────────────────────────────────────────────
-CELERY_BROKER_URL = os.environ.get('REDIS_URL', '')
-CELERY_RESULT_BACKEND = os.environ.get('REDIS_URL', '')
+REDIS_URL = os.environ.get('REDIS_URL', '')
 
-if CELERY_BROKER_URL.startswith('rediss://'):
+CELERY_BROKER_URL          = REDIS_URL
+CELERY_RESULT_BACKEND      = REDIS_URL
+CELERY_ACCEPT_CONTENT      = ['json']
+CELERY_TASK_SERIALIZER     = 'json'
+CELERY_RESULT_SERIALIZER   = 'json'
+CELERY_TIMEZONE            = 'UTC'
+
+# If REDIS_URL is a rediss:// (TLS) URL, disable cert verification for Upstash
+if REDIS_URL.startswith('rediss://'):
     import ssl
-    CELERY_BROKER_USE_SSL = {
-        'ssl_cert_reqs': ssl.CERT_NONE
-    }
-    CELERY_REDIS_BACKEND_USE_SSL = {
-        'ssl_cert_reqs': ssl.CERT_NONE
-    }
+    _SSL_CONFIG = {'ssl_cert_reqs': ssl.CERT_NONE}
+    CELERY_BROKER_USE_SSL          = _SSL_CONFIG
+    CELERY_REDIS_BACKEND_USE_SSL   = _SSL_CONFIG
 
-CELERY_TASK_SOFT_TIME_LIMIT = 300
-CELERY_TASK_TIME_LIMIT = 360
+# Task time limits — PDF processing should finish within 5 min
+CELERY_TASK_SOFT_TIME_LIMIT = 270   # sends SoftTimeLimitExceeded at 4.5 min
+CELERY_TASK_TIME_LIMIT      = 300   # hard kill at 5 min
+
+# Retry connection to broker on startup (important on Render cold start)
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES      = 5
+
+# Acknowledge task only AFTER it completes (prevents lost tasks on worker crash)
+CELERY_TASK_ACKS_LATE         = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1   # one task at a time per worker thread
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
