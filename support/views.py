@@ -7,17 +7,8 @@ from rest_framework.views import APIView
 from django.db.models import Avg, Count, Q, F
 from django.utils import timezone
 import logging
-import threading
-import os
 
 logger = logging.getLogger(__name__)
-
-# Use Celery ONLY when explicitly enabled via env var (requires a running worker).
-# Default is False — processing runs in a daemon thread inside the web process.
-# To enable Celery: set USE_CELERY=true in your environment / Render dashboard.
-_USE_CELERY = os.environ.get('USE_CELERY', 'false').strip().lower() == 'true'
-
-
 
 from .models import Document, DocumentChunk, Conversation, Message, EscalationTicket
 from .serializers import (
@@ -33,43 +24,6 @@ from .serializers import (
 )
 from .tasks import process_document
 from .rag import hybrid_retrieve, generate_grounded_answer
-
-
-def _dispatch_thread(doc_id):
-    """
-    Run process_document() in a background daemon thread.
-
-    This is the default processing path when USE_CELERY=false (or not set).
-    It calls the exact same Celery task function directly — no broker needed.
-    The DB connection opened by the thread is closed when the thread finishes
-    to prevent connection pool leaks in long-running gunicorn processes.
-    """
-    from django.db import connection
-
-    def _run(document_id):
-        try:
-            logger.info("process_document[%s] thread started.", document_id)
-            process_document(document_id)
-            logger.info("process_document[%s] thread completed.", document_id)
-        except Exception as exc:
-            logger.error(
-                "process_document[%s] thread failed: %s",
-                document_id, exc,
-            )
-        finally:
-            connection.close()   # release DB connection back to pool
-
-    thread = threading.Thread(
-        target=_run,
-        args=(doc_id,),
-        daemon=True,
-        name=f"doc-process-{doc_id}",
-    )
-    thread.start()
-    logger.info(
-        "process_document[%s] dispatched to thread (thread=%s).",
-        doc_id, thread.name,
-    )
 
 
 
@@ -93,54 +47,42 @@ class DocumentViewSet(viewsets.ModelViewSet):
         """
         Upload a document (PDF or TXT).
 
-        Processing strategy (controlled by USE_CELERY env var):
+        Processing is dispatched asynchronously via Celery + Redis.
+        Requires a running Celery worker connected to the same Redis broker.
 
-          USE_CELERY=true  → dispatch to Celery worker via Redis broker.
-                             Requires a running Celery worker process.
-
-          USE_CELERY=false → run process_document() inside a daemon thread
-          (default)          directly in the web process. Works on any host
-                             without a separate worker service.
-
-        HTTP 201 is returned immediately in both cases.
+        HTTP 201 is returned immediately; the document status transitions:
+            processing → ready (success) or failed (error)
         """
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid():
             document = serializer.save(uploaded_by=request.user, status='processing')
             doc_id = document.id
 
-            if _USE_CELERY:
-                # ── Celery path (USE_CELERY=true) ─────────────────────────────
-                # Only use this when a Celery worker is actually running.
-                try:
-                    result = process_document.apply_async(
-                        args=(doc_id,),
-                        expires=600,
-                    )
-                    logger.info(
-                        "process_document[%s] queued via Celery (task_id=%s).",
-                        doc_id, result.id,
-                    )
-                except Exception as exc:
-                    # Celery enqueue failed — fall through to thread as safety net
-                    logger.error(
-                        "process_document[%s] Celery enqueue failed (%s). "
-                        "Falling back to thread.",
-                        doc_id, exc,
-                    )
-                    _dispatch_thread(doc_id)
-            else:
-                # ── Thread path (default, USE_CELERY=false) ───────────────────
-                # Runs the same process_document() task function directly
-                # in a background daemon thread — no worker process needed.
-                _dispatch_thread(doc_id)
+            try:
+                result = process_document.apply_async(
+                    args=(doc_id,),
+                    expires=600,
+                )
+                logger.info(
+                    "process_document[%s] queued via Celery (task_id=%s).",
+                    doc_id, result.id,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "process_document[%s] Celery enqueue failed: %s",
+                    doc_id, exc,
+                )
+                return Response(
+                    {'error': f'Failed to queue document processing: {exc}'},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
 
             return Response(
                 {
                     'message': 'Document uploaded. Processing started — refresh in a few seconds.',
                     'document': DocumentSerializer(document).data,
                     'async': True,
-                    'celery_enabled': _USE_CELERY,
+                    'celery_enabled': True,
                 },
                 status=status.HTTP_201_CREATED,
             )
