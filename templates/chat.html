@@ -99,8 +99,8 @@
       </div>
       <div id="conversation-list" class="flex-1 overflow-y-auto p-3 space-y-1">
         {% for conv in conversations %}
-        <button onclick="loadConversation({{ conv.id }}, '{{ conv.title|truncatechars:30|escapejs }}')"
-                data-conv-id="{{ conv.id }}"
+        <button data-conv-id="{{ conv.id }}"
+                data-conv-title="{{ conv.title|truncatechars:30 }}"
                 class="conv-item w-full text-left px-3 py-2.5 rounded-lg hover:bg-slate-800 transition-all text-sm {% if conv.id == current_conv_id %}bg-slate-800 text-white{% else %}text-slate-400{% endif %}">
           <div class="font-medium text-slate-300 truncate text-xs">{{ conv.title|truncatechars:32 }}</div>
           <div class="text-xs text-slate-600 mt-0.5">{{ conv.updated_at|timesince }} ago</div>
@@ -140,8 +140,8 @@
 
 {% block extra_scripts %}
 <script>
-  const csrfToken = '{{ csrf_token }}';
-  let currentConvId = {{ current_conv_id|default:'null' }};
+  const csrfToken = '{{ csrf_token|escapejs }}';
+  let currentConvId = {{ current_conv_id|default:'null'|safe }};
 
   // Auto-resize textarea
   const textarea = document.getElementById('chat-input');
@@ -174,6 +174,15 @@
     document.getElementById('escalation-banner').classList.add('hidden');
   }
 
+  // Event delegation for conversation list clicks
+  document.getElementById('conversation-list').addEventListener('click', function(e) {
+    const btn = e.target.closest('.conv-item');
+    if (btn) {
+      const convId = parseInt(btn.dataset.convId);
+      if (!isNaN(convId)) loadConversation(convId, btn.dataset.convTitle || '');
+    }
+  });
+
   async function loadConversation(convId, title) {
     currentConvId = convId;
     document.getElementById('conversation-id').value = convId;
@@ -190,13 +199,19 @@
       const resp = await fetch(`/api/support/conversations/${convId}/messages/`, {
         headers: { 'X-CSRFToken': csrfToken }
       });
-      if (!resp.ok) return;
+      if (!resp.ok) {
+        appendMessage('assistant', 'Failed to load conversation. Please try again.', []);
+        return;
+      }
       const msgs = await resp.json();
       const container = document.getElementById('messages');
       container.innerHTML = '';
       msgs.forEach(m => appendMessage(m.role, m.content, []));
       container.scrollTop = container.scrollHeight;
-    } catch(e) { console.error(e); }
+    } catch(e) {
+      console.error(e);
+      appendMessage('assistant', 'Network error loading conversation.', []);
+    }
   }
 
   function appendMessage(role, text, sources) {
@@ -291,12 +306,10 @@
           document.getElementById('ticket-id-display').textContent = data.ticket_id || '—';
         }
       } else if (resp.status === 429) {
-        // Rate limit — show countdown timer so user knows exactly when to retry
-        const waitSecs = data.retry_after_seconds || 60;
+        const waitSecs = typeof data.retry_after_seconds === 'number' ? data.retry_after_seconds : 60;
         const sendBtn = document.getElementById('send-btn');
         const chatInput = document.getElementById('chat-input');
 
-        // Build the rate-limit message bubble
         const container = document.getElementById('messages');
         const div = document.createElement('div');
         div.className = 'flex items-start gap-3 animate-fade-in';
@@ -314,9 +327,7 @@
             <div class="text-xs text-slate-600 mt-1 ml-1">AI Agent · just now</div>
           </div>`;
         container.appendChild(div);
-        container.scrollTop = container.scrollHeight;
 
-        // Disable input during cooldown
         sendBtn.disabled = true;
         chatInput.disabled = true;
         sendBtn.classList.add('opacity-40', 'cursor-not-allowed');
@@ -335,15 +346,17 @@
             chatInput.focus();
           }
         }, 1000);
+
+        container.scrollTop = container.scrollHeight;
+        return;
       } else {
         appendMessage('assistant', '⚠️ ' + (data.error || 'Something went wrong. Please try again.'), []);
       }
     } catch(err) {
       hideTyping();
       appendMessage('assistant', '⚠️ Network error. Please check your connection.', []);
-    } finally {
-      document.getElementById('send-btn').disabled = false;
     }
+    document.getElementById('send-btn').disabled = false;
   });
 </script>
 {% endblock %}
