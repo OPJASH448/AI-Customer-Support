@@ -141,7 +141,7 @@
 {% block extra_scripts %}
 <script>
   const csrfToken = '{{ csrf_token|escapejs }}';
-  let currentConvId = {{ current_conv_id|default:'null'|safe }};
+  let currentConvId = {{ current_conv_id|default_if_none:"null"|safe }};
 
   // Auto-resize textarea
   const textarea = document.getElementById('chat-input');
