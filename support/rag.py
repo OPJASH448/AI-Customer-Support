@@ -4,20 +4,19 @@ Hybrid RAG Engine
 Combines two complementary retrieval strategies:
 
   1. Dense Retrieval  — Gemini gemini-embedding-001 (768-dim) cosine similarity
-                        via pgvector HNSW index.  Good for semantic / conceptual
+                        via pgvector HNSW index. Good for semantic / conceptual
                         queries where the exact wording differs from the document.
 
-  2. Sparse Retrieval — BM25 (Best Match 25) keyword-based ranking (rank_bm25).
+  2. Sparse Retrieval — PostgreSQL Full-Text Search (tsvector + GIN index) with
+                        cover-density ranking and websearch natural query parsing.
                         Good for exact keyword, product-code, and named-entity
-                        queries where dense embeddings may miss precise terms.
+                        queries without in-memory Python overhead.
 
   3. Reciprocal Rank Fusion (RRF) — Merges both ranked lists into a single
                         relevance-ordered list using the formula:
                             score(chunk) = Σ 1 / (k + rank_i)   k = 60
                         Higher fused score → chunk appears first in final list.
 
-No new database tables or migrations are required.
-BM25 corpus is built in-memory from DocumentChunk.content at query time.
 Uses google-genai SDK (replaces deprecated google-generativeai).
 """
 
@@ -30,8 +29,8 @@ from typing import List, Optional
 from google import genai
 from google.genai import types as genai_types
 from django.conf import settings
+from django.contrib.postgres.search import SearchQuery, SearchRank
 from pgvector.django import CosineDistance
-from rank_bm25 import BM25Okapi
 
 from .models import DocumentChunk
 
@@ -122,36 +121,40 @@ def _dense_retrieve(question_embedding: List[float], queryset, top_k: int) -> Li
     )
 
 
-# ── Sparse / BM25 retrieval helpers ───────────────────────────────────────────
+# ── Sparse / PostgreSQL Full-Text Search retrieval helpers ───────────────────
 
-def _build_bm25_index(chunks: List) -> Optional[BM25Okapi]:
+def _sparse_retrieve(query: str, queryset, top_k: int) -> List:
     """
-    Build an in-memory BM25Okapi index from a list of DocumentChunk objects.
-    Returns None if the corpus is empty.
+    PostgreSQL Full-Text Search (tsvector + GIN index) over the DocumentChunk queryset.
+    Replaces in-memory BM25 to eliminate network and memory overhead.
+    Uses 'websearch' syntax for natural language queries and ranks by cover density.
     """
-    if not chunks:
-        return None
-    tokenized_corpus = [_tokenize(chunk.content) for chunk in chunks]
-    return BM25Okapi(tokenized_corpus)
+    clean_query = query.strip()
+    if not clean_query:
+        return []
 
-
-def _sparse_retrieve(query: str, chunks: List, top_k: int) -> List:
-    """
-    BM25 keyword search over the in-memory chunk corpus.
-    Returns the top_k chunks sorted by BM25 score descending.
-    Gracefully returns [] if the corpus is empty.
-    """
-    if not chunks:
+    try:
+        search_query = SearchQuery(clean_query, search_type="websearch", config="english")
+        results = (
+            queryset
+            .filter(search_vector=search_query)
+            .annotate(rank=SearchRank("search_vector", search_query, cover_density=True))
+            .order_by("-rank")[:top_k]
+        )
+        matched = list(results)
+        if not matched:
+            plain_query = SearchQuery(clean_query, search_type="plain", config="english")
+            results = (
+                queryset
+                .filter(search_vector=plain_query)
+                .annotate(rank=SearchRank("search_vector", plain_query, cover_density=True))
+                .order_by("-rank")[:top_k]
+            )
+            matched = list(results)
+        return matched
+    except Exception as exc:
+        logger.warning("_sparse_retrieve: PostgreSQL text search error: %s", exc)
         return []
-    bm25 = _build_bm25_index(chunks)
-    if bm25 is None:
-        return []
-    query_tokens = _tokenize(query)
-    if not query_tokens:
-        return []
-    scores = bm25.get_scores(query_tokens)
-    scored = sorted(zip(chunks, scores), key=lambda x: x[1], reverse=True)
-    return [chunk for chunk, score in scored[:top_k] if score > 0]
 
 
 # ── Reciprocal Rank Fusion ─────────────────────────────────────────────────────
@@ -207,11 +210,8 @@ def hybrid_retrieve(
     if user is not None:
         queryset = queryset.filter(document__uploaded_by=user)
 
-    # ── Fetch corpus for BM25 ─────────────────────────────────────────────────
-    corpus_limit = 10000
-    all_chunks = list(queryset[:corpus_limit])
-
-    if not all_chunks:
+    # ── Check active corpus ───────────────────────────────────────────────────
+    if not queryset.exists():
         logger.warning("hybrid_retrieve: no active/ready chunks found.")
         return []
 
@@ -223,9 +223,9 @@ def hybrid_retrieve(
         logger.error("hybrid_retrieve: dense branch failed — %s", exc)
         dense_chunks = []
 
-    # ── Sparse (BM25) branch ───────────────────────────────────────────────────
+    # ── Sparse (PostgreSQL FTS) branch ─────────────────────────────────────────
     try:
-        sparse_chunks = _sparse_retrieve(question, all_chunks, top_k=SPARSE_TOP_K)
+        sparse_chunks = _sparse_retrieve(question, queryset, top_k=SPARSE_TOP_K)
     except Exception as exc:
         logger.error("hybrid_retrieve: sparse branch failed — %s", exc)
         sparse_chunks = []

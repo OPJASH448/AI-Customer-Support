@@ -1,6 +1,7 @@
 from celery import shared_task
 from django.core.mail import send_mail
 from django.conf import settings
+from django.contrib.postgres.search import SearchVector
 import os
 import io
 import logging
@@ -174,6 +175,11 @@ def process_document(self, document_id):
 
         # ── 6. Persist to DB ─────────────────────────────────────────────────
         DocumentChunk.objects.bulk_create(chunk_objects)
+
+        # Populate search_vector for PostgreSQL Full-Text Search (GIN-indexed)
+        DocumentChunk.objects.filter(document=document).update(
+            search_vector=SearchVector("content")
+        )
 
         document.status = "ready"
         document.save(update_fields=["status", "updated_at"])

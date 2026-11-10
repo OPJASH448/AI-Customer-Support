@@ -45,7 +45,7 @@ def retrieve_context(query: str, top_k: int = 5, user=None) -> list:
 
     Internally calls hybrid_retrieve() which runs:
       1) Dense  — pgvector HNSW cosine similarity (Gemini embeddings)
-      2) Sparse — BM25 keyword search (rank_bm25, in-memory)
+      2) Sparse — PostgreSQL Full-Text Search (tsvector + GIN index)
       3) Fusion — Reciprocal Rank Fusion (RRF, k=60)
     """
     try:

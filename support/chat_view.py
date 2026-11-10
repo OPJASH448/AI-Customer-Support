@@ -4,7 +4,7 @@ Hybrid RAG Chat Endpoint — POST /api/chat/
 Full pipeline:
   1. Hybrid RAG retrieval:
        a) Dense  — pgvector HNSW cosine similarity (Gemini 768-dim embeddings)
-       b) Sparse — BM25 keyword search (rank_bm25, in-memory)
+       b) Sparse — PostgreSQL Full-Text Search (tsvector + GIN index)
        c) Merge  — Reciprocal Rank Fusion (RRF, k=60)
   2. Build grounded context prompt
   3. Gemini 2.0 Flash generation with source citation (google-genai SDK)
@@ -174,7 +174,7 @@ class ChatView(APIView):
         # ── Hybrid RAG Retrieval ──────────────────────────────────────────────
         # hybrid_retrieve() runs:
         #   1) Dense:  pgvector HNSW cosine similarity (Gemini embeddings)
-        #   2) Sparse: BM25 keyword search (rank_bm25, in-memory)
+        #   2) Sparse: PostgreSQL Full-Text Search (tsvector + GIN index)
         #   3) Fusion: Reciprocal Rank Fusion (RRF, k=60)
         try:
             chunks = hybrid_retrieve(

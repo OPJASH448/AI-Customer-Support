@@ -288,7 +288,7 @@ class RAGAskView(APIView):
     POST /api/support/rag/ask/
     Hybrid RAG flow:
       1) Dense retrieval  — pgvector HNSW cosine similarity (Gemini 768-dim embeddings)
-      2) Sparse retrieval — BM25 keyword search (rank_bm25, in-memory)
+      2) Sparse retrieval — PostgreSQL Full-Text Search (tsvector + GIN index)
       3) RRF fusion       — Reciprocal Rank Fusion (k=60) to merge ranked lists
       4) Generate grounded answer from top-k fused chunks via Gemini 2.0 Flash
       5) Persist user/assistant messages and linked context chunks

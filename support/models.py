@@ -1,5 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.contrib.postgres.search import SearchVectorField
+from django.contrib.postgres.indexes import GinIndex
 from pgvector.django import VectorField, HnswIndex
 
 class Document(models.Model):
@@ -47,6 +49,7 @@ class DocumentChunk(models.Model):
     chunk_index = models.IntegerField()
     embedding = VectorField(dimensions=768)  # Google Gemini embedding dimension
     tokens = models.IntegerField(default=0)
+    search_vector = SearchVectorField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -60,7 +63,11 @@ class DocumentChunk(models.Model):
                 name='docchunk_embed_hnsw_idx',
                 fields=['embedding'],
                 opclasses=['vector_cosine_ops']
-            )
+            ),
+            GinIndex(
+                name='docchunk_tsv_gin_idx',
+                fields=['search_vector']
+            ),
         ]
 
 
