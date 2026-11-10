@@ -127,31 +127,47 @@ def _sparse_retrieve(query: str, queryset, top_k: int) -> List:
     """
     PostgreSQL Full-Text Search (tsvector + GIN index) over the DocumentChunk queryset.
     Replaces in-memory BM25 to eliminate network and memory overhead.
-    Uses 'websearch' syntax for natural language queries and ranks by cover density.
+    Uses cover-density ranking (proximity and frequency of matched words).
     """
     clean_query = query.strip()
     if not clean_query:
         return []
 
     try:
+        # 1. Try websearch first (great for exact phrases, quotes, or targeted terms)
         search_query = SearchQuery(clean_query, search_type="websearch", config="english")
-        results = (
+        results = list(
             queryset
             .filter(search_vector=search_query)
             .annotate(rank=SearchRank("search_vector", search_query, cover_density=True))
             .order_by("-rank")[:top_k]
         )
-        matched = list(results)
-        if not matched:
-            plain_query = SearchQuery(clean_query, search_type="plain", config="english")
-            results = (
+        if results:
+            return results
+
+        # 2. For conversational questions (e.g. "Tell me about X and Y"), combine
+        # informative terms with OR so chunks matching any key term are returned and ranked
+        words = [w for w in re.sub(r"[^a-zA-Z0-9\s]", "", clean_query).split() if len(w) > 2]
+        if words:
+            or_expr = " | ".join(words)
+            or_query = SearchQuery(or_expr, search_type="raw", config="english")
+            results = list(
                 queryset
-                .filter(search_vector=plain_query)
-                .annotate(rank=SearchRank("search_vector", plain_query, cover_density=True))
+                .filter(search_vector=or_query)
+                .annotate(rank=SearchRank("search_vector", or_query, cover_density=True))
                 .order_by("-rank")[:top_k]
             )
-            matched = list(results)
-        return matched
+            if results:
+                return results
+
+        # 3. Fallback to plain query
+        plain_query = SearchQuery(clean_query, search_type="plain", config="english")
+        return list(
+            queryset
+            .filter(search_vector=plain_query)
+            .annotate(rank=SearchRank("search_vector", plain_query, cover_density=True))
+            .order_by("-rank")[:top_k]
+        )
     except Exception as exc:
         logger.warning("_sparse_retrieve: PostgreSQL text search error: %s", exc)
         return []
