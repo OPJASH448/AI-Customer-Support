@@ -83,15 +83,6 @@ EMBED_MODEL = "gemini-embedding-001"
 GEN_MODEL = "gemini-2.5-flash"
 
 
-# ── Tokeniser (shared between BM25 and query splitting) ───────────────────────
-
-def _tokenize(text: str) -> List[str]:
-    """Lowercase, remove punctuation, split on whitespace — simple but effective."""
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    return text.split()
-
-
 # ── Dense retrieval helpers ────────────────────────────────────────────────────
 
 def embed_query(question: str) -> List[float]:
@@ -213,7 +204,7 @@ def hybrid_retrieve(
     Full Hybrid RAG retrieval:
       1. Build base queryset (active, ready documents, optionally per-user)
       2. Dense branch  — pgvector HNSW cosine search with Gemini embeddings
-      3. Sparse branch — BM25 in-memory keyword search over same corpus
+      3. Sparse branch — PostgreSQL Full-Text Search (tsvector + GIN index)
       4. RRF fusion    — Merge and re-rank to final top_k
 
     Falls back gracefully if one branch fails.
